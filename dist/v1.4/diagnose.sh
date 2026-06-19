@@ -31,7 +31,21 @@
 
 OUT="$HOME/Desktop/eos-webcam-diagnostics.txt"
 PLUGIN="/Library/CoreMediaIO/Plug-Ins/DAL/EOSWebcamUtility.plugin"
-USERNAME="$(whoami)"   # redacted from the report so you can paste it publicly
+
+# --- Build privacy redaction rules (so the report is safe to paste publicly) ---
+# Redacts: the login username, the account holder's real name, and any
+# possessive device names like "Ollie's iPhone" (including other people's
+# devices that appear via Continuity Camera).
+USERNAME="$(whoami)"
+FULLNAME="$(id -F 2>/dev/null)"
+REDACT=(-E -e "s/${USERNAME}/<username redacted>/g")
+# Generic "<Name>'s " device pattern (straight and curly apostrophes).
+REDACT+=(-e "s/[[:alpha:]][[:alpha:]]*['’]s /<name redacted>'s /g")
+# Each token of the account holder's real name, word-boundary anchored
+# (BSD/macOS sed) so it won't mangle unrelated words.
+for tok in $FULLNAME; do
+    [ "${#tok}" -ge 2 ] && REDACT+=(-e "s/[[:<:]]${tok}[[:>:]]/<name redacted>/g")
+done
 
 {
 echo "===== EOS Webcam Utility — Diagnostic Report ====="
@@ -99,8 +113,9 @@ else
     echo "       Then reboot and run this diagnostic again."
 fi
 echo "===== end of report ====="
-} 2>&1 | sed "s/${USERNAME}/<username redacted>/g" > "$OUT"
+} 2>&1 | sed "${REDACT[@]}" > "$OUT"
 
 echo "Report written to: $OUT"
-echo "(your account username has been redacted from the report)"
+echo "(your username, real name, and device names have been redacted —"
+echo " still give it a quick skim before pasting)"
 echo "Open it, check there's nothing private, then paste it into the GitHub issue."

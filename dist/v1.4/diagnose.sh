@@ -31,6 +31,7 @@
 
 OUT="$HOME/Desktop/eos-webcam-diagnostics.txt"
 PLUGIN="/Library/CoreMediaIO/Plug-Ins/DAL/EOSWebcamUtility.plugin"
+USERNAME="$(whoami)"   # redacted from the report so you can paste it publicly
 
 {
 echo "===== EOS Webcam Utility — Diagnostic Report ====="
@@ -98,7 +99,8 @@ else
     echo "       Then reboot and run this diagnostic again."
 fi
 echo "===== end of report ====="
-} > "$OUT" 2>&1
+} 2>&1 | sed "s/${USERNAME}/<username redacted>/g" > "$OUT"
 
 echo "Report written to: $OUT"
+echo "(your account username has been redacted from the report)"
 echo "Open it, check there's nothing private, then paste it into the GitHub issue."

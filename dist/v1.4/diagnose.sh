@@ -49,7 +49,7 @@ done
 
 {
 echo "===== EOS Webcam Utility — Diagnostic Report ====="
-date
+date -u   # UTC, so the report doesn't reveal your timezone/region
 
 echo; echo "----- macOS / hardware -----"
 sw_vers
@@ -90,7 +90,10 @@ system_profiler SPUSBDataType 2>/dev/null | grep -iA3 canon || echo "No Canon de
 echo; echo "----- Cameras macOS can see -----"
 echo "(the virtual 'EOS Webcam Utility' camera should appear here if the plug-in loaded)"
 CAMS="$(system_profiler SPCameraDataType 2>&1)"
-echo "$CAMS"
+# Show only the camera names (device fingerprints like Model ID / Unique ID
+# aren't needed for the diagnostic and are stripped for privacy). Names are
+# already run through the redaction filter at the end.
+echo "$CAMS" | grep -vE "Model ID:|Unique ID:"
 
 echo; echo "----- Recent plug-in load logs (last 10 min) -----"
 log show --last 10m --predicate \

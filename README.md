@@ -1,4 +1,4 @@
-# EOS Webcam Utility Fork v1.4
+# EOS Webcam Utility Fork v1.4.1
 
 A free, open-source community fork of Canon's discontinued EOS Webcam Utility that unlocks 1080p output for Canon EOS cameras used as USB webcams on macOS.
 

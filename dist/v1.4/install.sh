@@ -25,7 +25,7 @@
 
 set -e
 
-VERSION="1.4"
+VERSION="1.4.1"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PATCHER="$SCRIPT_DIR/patch-binaries.py"
 PLUGIN_DIR="/Library/CoreMediaIO/Plug-Ins/DAL/EOSWebcamUtility.plugin"

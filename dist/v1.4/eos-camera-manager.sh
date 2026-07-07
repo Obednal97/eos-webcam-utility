@@ -9,8 +9,11 @@
 
 LOG_FILE="$HOME/Library/Logs/eos-camera-manager.log"
 PLUGIN_RES="/Library/CoreMediaIO/Plug-Ins/DAL/EOSWebcamUtility.plugin/Contents/Resources"
-IMG_CONNECTING="$HOME/development/webcam-utility/errorNoDevice_connecting.jpg"
-IMG_DISCONNECTED="$HOME/development/webcam-utility/errorNoDevice_disconnected.jpg"
+# Images live alongside this script (the installer copies them into the same
+# directory), so resolve them relative to the script rather than a fixed path.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+IMG_CONNECTING="$SCRIPT_DIR/errorNoDevice_connecting.jpg"
+IMG_DISCONNECTED="$SCRIPT_DIR/errorNoDevice_disconnected.jpg"
 PROXY_PID=""
 PROXY_START_TIME=0
 RETRY_COUNT=0

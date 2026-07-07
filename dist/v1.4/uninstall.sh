@@ -9,8 +9,10 @@
 set -e
 
 PLUGIN_DIR="/Library/CoreMediaIO/Plug-Ins/DAL/EOSWebcamUtility.plugin"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 USER_HOME="$HOME"
-INSTALL_DIR="$USER_HOME/development/webcam-utility"
+# Match install.sh: the clone this script was run from (repo root).
+INSTALL_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 LAUNCH_AGENTS="$USER_HOME/Library/LaunchAgents"
 
 echo "============================================"

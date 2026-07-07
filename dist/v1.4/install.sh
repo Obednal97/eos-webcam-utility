@@ -35,7 +35,9 @@ USER_HOME="$HOME"
 USERNAME="$(whoami)"
 SUPPORT_DIR="$USER_HOME/Library/Application Support/EWCService"
 LAUNCH_AGENTS="$USER_HOME/Library/LaunchAgents"
-INSTALL_DIR="$USER_HOME/development/webcam-utility"
+# Install into the clone this script was run from (repo root, two levels up
+# from dist/v1.4) rather than a hardcoded path.
+INSTALL_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 LOG_DIR="$USER_HOME/Library/Logs"
 
 echo ""

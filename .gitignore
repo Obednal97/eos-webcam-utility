@@ -2,3 +2,4 @@
 *.backup-*
 *.log
 logo.png
+backups/

@@ -21,8 +21,16 @@ MAX_RETRIES=8
 CURRENT_IMAGE=""
 CAMERA_WAS_CONNECTED=""
 
+MAX_LOG_BYTES=1048576   # 1 MB — keep only the recent tail beyond this
+
 log_msg() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
+    # Rotate in place so a long-running daemon can't grow the log unbounded.
+    local size
+    size=$(stat -f%z "$LOG_FILE" 2>/dev/null || echo 0)
+    if [ "$size" -gt "$MAX_LOG_BYTES" ]; then
+        tail -n 500 "$LOG_FILE" > "$LOG_FILE.tmp" 2>/dev/null && mv "$LOG_FILE.tmp" "$LOG_FILE"
+    fi
 }
 
 is_camera_connected() {

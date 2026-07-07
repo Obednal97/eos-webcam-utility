@@ -199,7 +199,7 @@ File: `EOSWebcamUtility.plugin/Contents/Resources/EWCProxy`
 
 ### Phase 3: Camera Activation Auto-Retry (work-log/007)
 
-File: `~/development/webcam-utility/canon-camera-manager.sh`
+File: `dist/v1.4/eos-camera-manager.sh` (installed into the clone root)
 Installed as: `~/Library/LaunchAgents/com.eos-camera-manager.plist`
 
 A background daemon that monitors EWCProxy and auto-retries when camera connection fails. When EWCProxy exits within 15 seconds (indicating failed EDSDK session), the daemon restarts the Canon service, which triggers Zoom's DAL plugin to reconnect and send a fresh stream request.

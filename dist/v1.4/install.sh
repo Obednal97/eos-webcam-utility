@@ -40,6 +40,22 @@ LAUNCH_AGENTS="$USER_HOME/Library/LaunchAgents"
 INSTALL_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 LOG_DIR="$USER_HOME/Library/Logs"
 
+# --- Failure safety ---
+# If the install is interrupted after we've stopped the existing services
+# (e.g. the admin prompt is cancelled or a deploy step fails), restart Canon's
+# service on exit so the machine isn't left without a working camera.
+SERVICES_STOPPED=0
+INSTALL_COMPLETE=0
+restore_on_failure() {
+    [ "$INSTALL_COMPLETE" = 1 ] && return 0
+    [ "$SERVICES_STOPPED" = 1 ] || return 0
+    echo ""
+    echo "  Install did not finish — restarting Canon's service so your existing"
+    echo "  camera setup keeps working. Re-run the installer to try again."
+    launchctl load "$LAUNCH_AGENT_SYS" 2>/dev/null || true
+}
+trap restore_on_failure EXIT
+
 echo ""
 echo "============================================"
 echo "  EOS Webcam Utility Fork v${VERSION}"
@@ -84,6 +100,14 @@ case "$INSTALL_TYPE" in
 esac
 echo ""
 
+# --- Acquire admin up front ---
+# Prompt for the admin password now, before anything is torn down, so that
+# cancelling the prompt aborts cleanly instead of leaving services stopped.
+# macOS caches this authorization, so the deploy step below won't re-prompt.
+echo "Requesting admin privileges (needed to install system files)..."
+osascript -e 'do shell script "true" with administrator privileges'
+echo ""
+
 # --- Backup ---
 echo "[2/9] Creating backups..."
 BACKUP_DIR="$INSTALL_DIR/backups/pre-v${VERSION}-$(date +%Y%m%d-%H%M%S)"
@@ -111,6 +135,7 @@ launchctl unload "$LAUNCH_AGENTS/com.eos-camera-manager.plist" 2>/dev/null || tr
 launchctl unload "$LAUNCH_AGENT_SYS" 2>/dev/null || true
 pkill -9 EOSWebcamServic 2>/dev/null || true
 pkill -9 EWCProxy 2>/dev/null || true
+SERVICES_STOPPED=1
 sleep 1
 echo "  Done"
 
@@ -261,6 +286,7 @@ echo "[9/9] Starting services..."
 launchctl load "$LAUNCH_AGENT_SYS" 2>/dev/null || true
 sleep 1
 launchctl load "$LAUNCH_AGENTS/com.eos-camera-manager.plist" 2>/dev/null || true
+INSTALL_COMPLETE=1
 
 SVC=$(launchctl list 2>/dev/null | grep -c "com.canon.usa.EWCService" || true)
 MGR=$(launchctl list 2>/dev/null | grep -c "com.eos-camera-manager" || true)

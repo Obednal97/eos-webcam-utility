@@ -24,7 +24,6 @@ This fork takes the final free version (v1.3.16) and unlocks 1080p output, adds 
 | **Cost** | Free (discontinued) | **Free** (open source) |
 | **Auto-retry camera activation** | No | **Yes** |
 | **Custom loading screens** | No | **Yes** (with logo support) |
-| **Installer size** | 13MB | **14MB** |
 
 ### Feature Details
 
@@ -77,6 +76,7 @@ Three binary files were patched (ARM64 instruction-level modifications):
 3. **EWCProxy** — Default resolution and resolution switch cases changed from 720p to 1080p
 
 All patches are to Canon's software only. No macOS system files are modified.
+The exact offsets and before/after bytes live in [`dist/v1.4/patch-binaries.py`](dist/v1.4/patch-binaries.py), which applies them in place, verifies the original bytes first, and is idempotent.
 
 ---
 
@@ -86,6 +86,7 @@ All patches are to Canon's software only. No macOS system files are modified.
 - **Canon EOS camera** with USB connection
 - **USB cable** connecting your camera to your Mac
 - Admin privileges (the installer will prompt for your password)
+- Internet access — only if Canon's base software isn't already installed (the installer downloads it from Canon)
 
 ### Tested With
 
@@ -97,7 +98,8 @@ This fork has only been tested with the Canon 250D, but the underlying patches m
 
 ## Installation
 
-### Fresh Install (no Canon software installed)
+This project does **not** distribute Canon's software. The installer patches
+the original Canon EOS Webcam Utility v1.3.16 binaries on your own machine.
 
 ```bash
 git clone https://github.com/Obednal97/eos-webcam-utility.git
@@ -105,25 +107,32 @@ cd eos-webcam-utility
 bash dist/v1.4/install.sh
 ```
 
-### Upgrade from Canon's Original v1.3.x
+The installer gets Canon's original binaries in this order of preference:
 
-```bash
-git clone https://github.com/Obednal97/eos-webcam-utility.git
-cd eos-webcam-utility
-bash dist/v1.4/install.sh
-```
+1. **Already installed** — if you have EOS Webcam Utility (or a previous fork), it's patched in place.
+2. **Downloaded from Canon** — otherwise the installer downloads Canon's official
+   v1.3.16 package directly from Canon and verifies its SHA-256 before use.
+3. **Supplied by you** — if Canon ever stops hosting it, provide your own copy:
+   ```bash
+   bash dist/v1.4/install.sh --pkg /path/to/EOSWebcamUtility-MAC1.3.16.pkg.zip
+   ```
 
-The installer automatically detects existing installations and backs up your current files before upgrading.
+On first run you'll be asked to accept a short disclaimer (no warranty; you're
+responsible for complying with Canon's licence). Pass `--agree` to accept it
+non-interactively.
 
 ### What the Installer Does
 
-1. Detects existing Canon software (fresh / original / previous fork)
-2. Creates timestamped backups of all files it will modify
-3. Deploys patched binaries and signs them (requires admin password)
-4. Sets configuration to 1920x1080 @ 30fps
-5. Installs the camera manager daemon (auto-starts on login)
-6. Installs custom loading screen images
+1. Detects whether EOS Webcam Utility is already installed (fresh / original / previous fork)
+2. Obtains Canon's original binaries (installed / downloaded-and-checksummed / your `--pkg`)
+3. Runs Canon's own installer if the base software isn't present, then snapshots the originals for uninstall
+4. Applies the fork's byte patches with `patch-binaries.py` (self-verifying: aborts on any non-v1.3.16 build) and re-signs
+5. Sets configuration to 1920x1080 @ 30fps
+6. Installs the camera manager daemon (auto-starts on login) and custom loading screens
 7. Starts all services
+
+The patch step never changes anything unless the exact original bytes are
+present, and it's idempotent, so re-running it is safe.
 
 ### Uninstall
 
@@ -197,9 +206,19 @@ Areas where help would be especially appreciated:
 
 ---
 
-## License
+## License and legal
 
-This project is provided as-is for personal use. It modifies Canon's discontinued EOS Webcam Utility v1.3.16. Use at your own risk.
+This repository contains only original work: installer/uninstaller/diagnostic
+scripts, the `patch-binaries.py` patcher (which ships the byte offsets of the
+fork's own changes, not Canon's code), custom loading-screen images, and
+documentation. It does **not** contain or distribute any Canon software.
+
+Canon's EOS Webcam Utility is Canon's copyrighted software. This project
+patches a copy that you obtain yourself (an existing install, or Canon's own
+package downloaded from Canon). You are solely responsible for complying with
+Canon's licence and terms of use. The fork's scripts are provided as-is, with
+no warranty, for personal use, at your own risk. The authors and contributors
+accept no liability. If you don't accept this, don't run the installer.
 
 ---
 

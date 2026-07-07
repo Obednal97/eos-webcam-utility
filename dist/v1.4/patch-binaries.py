@@ -17,7 +17,7 @@
 # Patch offsets were derived by diffing Canon v1.3.16 (sha256
 # 5ad0333bd6a1c66f88c70aac631e5133c5f3dd6fc579e45dd473d1e964c02321) against
 # the patched build; applying them to a clean original and re-signing ad-hoc
-# reproduces the patched binaries exactly. See PLAN.md for the annotated table.
+# reproduces the patched binaries exactly. The offsets are annotated inline below.
 
 import os
 import sys

@@ -179,17 +179,8 @@ The logo is automatically scaled to fit (never stretched) and placed above the "
 
 ## Technical Details
 
-Full technical documentation is in [PLAN.md](PLAN.md), including:
-
-- Complete binary patch tables with ARM64 instruction offsets
-- Video pipeline architecture
-- Upscaling algorithm analysis (DCT-domain scaling at 15/8 factor)
-- Camera activation race condition investigation (ptpcamerad)
-- 60fps hardware limitation proof (frame hashing: 52 unique out of 61 delivered)
-- Competitive analysis of 8 related open-source projects
-- PTP liveview size parameter testing results
-
-Detailed work logs for every phase are in the [work-log/](work-log/) directory.
+- **Binary patch tables** (ARM64 instruction offsets, original/patched bytes, and purpose) are annotated inline in [`dist/v1.4/patch-binaries.py`](dist/v1.4/patch-binaries.py).
+- **Everything else** — video pipeline architecture, the DCT-domain upscaling analysis (15/8 factor), the `ptpcamerad` activation race condition, the 60fps hardware-limit investigation, competitive analysis, and PTP liveview testing — is documented in the [work-log/](work-log/) directory, one log per phase.
 
 
 ---

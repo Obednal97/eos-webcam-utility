@@ -74,6 +74,16 @@ echo "(a quarantine flag on a .jpg image is harmless; one on the .plugin bundle 
 echo " executables would block loading — that is the one that matters)"
 xattr -lr "$PLUGIN" 2>&1 | grep -i quarantine || echo "no quarantine attribute anywhere (good)"
 
+echo; echo "----- Camera Extension registered? -----"
+echo "(Canon's software also ships a modern Camera Extension,"
+echo " com.canon.cusa.eoswebcam.cameraExtension. On machines where the virtual"
+echo " camera works, enumeration goes through this extension, so its absence"
+echo " or a disabled state here is significant — see GitHub issue #3.)"
+SYSEXT="$(systemextensionsctl list 2>&1)"
+echo "$SYSEXT" | grep -iE "canon|eoswebcam" || echo "no Canon entry in systemextensionsctl list"
+pluginkit -m -v -i com.canon.cusa.eoswebcam.cameraExtension 2>/dev/null \
+  || echo "no pluginkit registration for com.canon.cusa.eoswebcam.cameraExtension"
+
 echo; echo "----- EDSDK framework present? -----"
 ls -la "/Library/Frameworks/EDSDK.framework" 2>&1 | head -5
 
@@ -81,6 +91,20 @@ echo; echo "----- Services loaded? -----"
 launchctl list 2>/dev/null | grep -iE "ewc|eos|canon" || echo "no EWC/EOS services loaded"
 echo "-- processes --"
 pgrep -fl "EOSWebcam|EWCProxy|EWCService" || echo "no service processes running"
+echo "-- service detail --"
+SVCDETAIL="$(launchctl print "gui/$(id -u)/com.canon.usa.EWCService" 2>/dev/null \
+  | grep -E "state|pid|last exit|path|program" | head -8)"
+echo "${SVCDETAIL:-launchctl print unavailable for com.canon.usa.EWCService}"
+
+echo; echo "----- Recent crashes? -----"
+echo "(rules out / confirms the service or proxy crashing)"
+CRASHES="$(ls -lt "$HOME/Library/Logs/DiagnosticReports/" 2>/dev/null \
+  | grep -iE "EOSWebcam|EWCProxy|EWCService|EWCPairing" | head -10)"
+echo "${CRASHES:-no EWC/EOSWebcam crash reports}"
+
+echo; echo "----- Security management state -----"
+spctl --status 2>&1
+profiles status -type enrollment 2>/dev/null || echo "profiles status unavailable without admin (fine to skip)"
 
 echo; echo "----- Config present? -----"
 ls -la "$HOME/Library/Application Support/EWCService/" 2>&1
@@ -107,7 +131,11 @@ tail -30 "$HOME/Library/Logs/eos-camera-manager.log" 2>/dev/null || echo "no man
 
 echo; echo "===== VERDICT ====="
 if echo "$CAMS" | grep -q "EOS Webcam Utility"; then
-    echo "[PASS] macOS CAN see the 'EOS Webcam Utility' virtual camera — the plug-in IS loading."
+    echo "[PASS] macOS CAN see the 'EOS Webcam Utility' virtual camera."
+    if echo "$LOGS" | grep -q "com.canon.cusa.eoswebcam.cameraExtension"; then
+        echo "       Enumeration went through Canon's modern Camera Extension"
+        echo "       (com.canon.cusa.eoswebcam.cameraExtension), not the legacy DAL plug-in."
+    fi
     echo "       If it still doesn't show in a specific app, that app is likely refusing to load"
     echo "       third-party DAL plug-ins. Try a different app (e.g. Zoom, OBS) to confirm,"
     echo "       and make sure the EWCService process above is running so it sends video."
@@ -131,8 +159,11 @@ elif echo "$LOGS" | grep -qiE "AMFI: code signature validation failed|adhoc sign
     echo "       Please report on issue #3 whether that fixes it for you."
 else
     echo "[FAIL] macOS does NOT see the virtual camera — the plug-in is not loading."
-    echo "       Most likely: it wasn't (re)installed after a macOS upgrade."
-    echo "       Fix: re-run the installer ->  bash dist/v1.4/install.sh"
+    echo "       Check the 'Camera Extension registered?' section above: if Canon's"
+    echo "       Camera Extension is missing or disabled, enable it in System Settings"
+    echo "       -> General -> Login Items & Extensions -> Camera (or reinstall and"
+    echo "       approve the prompt), then reboot and re-run this diagnostic."
+    echo "       Otherwise: re-run the installer ->  bash dist/v1.4/install.sh"
     echo "       Then reboot and run this diagnostic again."
 fi
 echo "===== end of report ====="

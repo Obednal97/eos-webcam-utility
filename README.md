@@ -121,6 +121,18 @@ On first run you'll be asked to accept a short disclaimer (no warranty; you're
 responsible for complying with Canon's licence). Pass `--agree` to accept it
 non-interactively.
 
+If you have an Apple Developer account, you can sign the patched binaries with
+your own identity instead of the ad-hoc default:
+
+```bash
+bash dist/v1.4/install.sh --sign-identity "Developer ID Application: Your Name (TEAMID)"
+```
+
+This is needed on macOS versions that refuse to load ad-hoc-signed DAL
+plug-ins (reported on 26.5.2, [issue #3](https://github.com/Obednal97/eos-webcam-utility/issues/3)).
+Signing happens entirely on your machine with your certificate; nothing is
+uploaded or redistributed.
+
 ### What the Installer Does
 
 1. Detects whether EOS Webcam Utility is already installed (fresh / original / previous fork)
@@ -173,7 +185,7 @@ The logo is automatically scaled to fit (never stretched) and placed above the "
 - **1080p is upscaled** — The camera sends ~1024x576 natively over USB. The 1080p output is upscaled using DCT-domain scaling. True native 1080p requires HDMI output + capture card.
 - **Camera activation takes ~20-30 seconds** — Due to a race condition with macOS's `ptpcamerad` service. The daemon handles this automatically but it takes a few retry cycles.
 - **DAL plugin architecture is deprecated** — Apple deprecated CoreMediaIO DAL plugins at WWDC 2022. The plugin still works on current macOS but may break in future versions. A Camera Extension (CMIOExtension) migration is planned.
-- **macOS 26.5.2 may block the plug-in entirely** — There is a report ([issue #3](https://github.com/Obednal97/eos-webcam-utility/issues/3)) of macOS 26.5.2 refusing to load the ad-hoc-signed plug-in (AMFI code-signature rejections in the system log), while the same setup passes on 26.5.1. This is under investigation and not yet confirmed as a general 26.5.2 change. If the virtual camera disappeared for you after a macOS update, run `bash dist/v1.4/diagnose.sh` and add the report to that issue. There is no safe workaround right now (do **not** disable SIP); the long-term fix is the Camera Extension migration, which needs an Apple Developer certificate (see [work-log/009](work-log/009-camera-extension-investigation.md)).
+- **macOS 26.5.2 may block the plug-in entirely** — There is a report ([issue #3](https://github.com/Obednal97/eos-webcam-utility/issues/3)) of macOS 26.5.2 refusing to load the ad-hoc-signed plug-in (AMFI code-signature rejections in the system log), while the same setup passes on 26.5.1. This is under investigation and not yet confirmed as a general 26.5.2 change. If the virtual camera disappeared for you after a macOS update, run `bash dist/v1.4/diagnose.sh` and add the report to that issue. If you have an Apple Developer account, reinstalling with `--sign-identity` (see Installation) should satisfy the OS policy; otherwise there is no safe workaround right now (do **not** disable SIP). The long-term fix for everyone is the Camera Extension migration (see [work-log/009](work-log/009-camera-extension-investigation.md)), now unblocked and in planning.
 - **Apple Silicon only** — The patched binaries are ARM64. Intel Macs are not supported by this fork.
 
 ---

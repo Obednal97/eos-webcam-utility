@@ -60,7 +60,8 @@ echo; echo "----- Is the plug-in installed? -----"
 ls -la "/Library/CoreMediaIO/Plug-Ins/DAL/" 2>&1
 
 echo; echo "----- Plug-in code signature -----"
-echo "(the executable should be present and signed 'adhoc'; that is expected for this fork)"
+echo "(the executable should be present and signed 'adhoc' — the fork's default — or"
+echo " with a Developer ID if you installed with --sign-identity)"
 codesign -dv --verbose=4 "$PLUGIN/Contents/MacOS/EOSWebcamUtility" 2>&1
 echo "-- bundle verify (informational only) --"
 echo "NOTE: 'a sealed resource is missing or invalid' here is EXPECTED and harmless —"
@@ -124,6 +125,10 @@ elif echo "$LOGS" | grep -qiE "AMFI: code signature validation failed|adhoc sign
     echo "       https://github.com/Obednal97/eos-webcam-utility/issues/3). Please add"
     echo "       your macOS version ('sw_vers' output) to that issue so affected"
     echo "       versions can be tracked."
+    echo "       If you have an Apple Developer account, re-installing with your own"
+    echo "       signing identity should satisfy the OS policy:"
+    echo "         bash dist/v1.4/install.sh --sign-identity 'Developer ID Application: <you>'"
+    echo "       Please report on issue #3 whether that fixes it for you."
 else
     echo "[FAIL] macOS does NOT see the virtual camera — the plug-in is not loading."
     echo "       Most likely: it wasn't (re)installed after a macOS upgrade."

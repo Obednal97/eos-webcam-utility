@@ -20,7 +20,15 @@
 #   - Admin privileges (will prompt)
 #   - Internet access (only if Canon's package needs to be downloaded)
 #
-# Usage: bash install.sh [--pkg PATH] [--agree]
+# Usage: bash install.sh [--pkg PATH] [--agree] [--sign-identity IDENTITY]
+#
+# --sign-identity: sign the patched binaries with a real code-signing identity
+#   from your keychain instead of ad-hoc, e.g.
+#     --sign-identity "Developer ID Application: Your Name (TEAMID)"
+#   (or the identity's 40-char hex hash from 'security find-identity').
+#   Needed on macOS versions that refuse to load ad-hoc-signed DAL plug-ins
+#   (reported on 26.5.2 — see GitHub issue #3). Requires an Apple Developer
+#   account. Signing happens locally; nothing is uploaded or distributed.
 #
 
 set -e
@@ -50,12 +58,14 @@ CANON_PKG_SHA256="5ad0333bd6a1c66f88c70aac631e5133c5f3dd6fc579e45dd473d1e964c023
 # --- Args ---
 USER_PKG=""
 AGREED=0
+SIGN_ID="-"      # "-" = ad-hoc (default); or a keychain identity via --sign-identity
 while [ $# -gt 0 ]; do
     case "$1" in
         --pkg) USER_PKG="$2"; shift 2 ;;
+        --sign-identity) SIGN_ID="$2"; shift 2 ;;
         --agree|--yes|-y) AGREED=1; shift ;;
         -h|--help)
-            grep '^#' "$0" | sed 's/^# \{0,1\}//' | head -30
+            grep '^#' "$0" | sed 's/^# \{0,1\}//' | head -40
             exit 0 ;;
         *) echo "Unknown option: $1"; exit 1 ;;
     esac
@@ -101,6 +111,21 @@ if [ ! -f "$PATCHER" ]; then
     echo "  ERROR: patch-binaries.py not found next to this script."
     exit 1
 fi
+if [ "$SIGN_ID" != "-" ]; then
+    if ! security find-identity -v -p codesigning 2>/dev/null | grep -Fq "$SIGN_ID"; then
+        echo "  ERROR: signing identity not found in your keychain: $SIGN_ID"
+        echo "         List available identities with:"
+        echo "           security find-identity -v -p codesigning"
+        echo "         Pass the quoted name or the 40-char hex hash shown there."
+        exit 1
+    fi
+    case "$SIGN_ID" in
+        *"'"*)
+            echo "  ERROR: identity contains a quote character; pass the 40-char hex"
+            echo "         hash from 'security find-identity -v -p codesigning' instead."
+            exit 1 ;;
+    esac
+fi
 
 # Decide where Canon's original binaries will come from.
 SOURCE=""          # installed | download | userpkg
@@ -134,6 +159,11 @@ case "$SOURCE" in
     userpkg)   echo "  Canon source:  $USER_PKG" ;;
     download)  echo "  Canon source:  download from Canon" ;;
 esac
+if [ "$SIGN_ID" = "-" ]; then
+    echo "  Signing:       ad-hoc"
+else
+    echo "  Signing:       $SIGN_ID"
+fi
 echo ""
 
 # --- Consent ---
@@ -249,15 +279,36 @@ ROOT_SCRIPT="$(mktemp -t eoswc-deploy)"
     echo "chmod 666 '$PLUGIN_RES/errorNoDevice.jpg' 2>/dev/null || true"
     echo "chmod 666 '$PLUGIN_RES/errorBusy.jpg' 2>/dev/null || true"
     echo "chmod 666 '$PLUGIN_RES/default.jpg' 2>/dev/null || true"
-    echo "codesign --force --sign - '$PLUGIN_BIN/EOSWebcamUtility'"
-    echo "codesign --force --sign - '$PLUGIN_RES/EOSWebcamService'"
-    echo "codesign --force --sign - '$PLUGIN_RES/EWCProxy'"
-    echo "codesign --force --deep --sign - '$PLUGIN_DIR'"
+    if [ "$SIGN_ID" = "-" ]; then
+        echo "codesign --force --sign - '$PLUGIN_BIN/EOSWebcamUtility'"
+        echo "codesign --force --sign - '$PLUGIN_RES/EOSWebcamService'"
+        echo "codesign --force --sign - '$PLUGIN_RES/EWCProxy'"
+        echo "codesign --force --deep --sign - '$PLUGIN_DIR'"
+    else
+        # A real signing identity lives in the user's login keychain, which
+        # codesign can't reach from this root context. Hand the bundle to the
+        # user so the signing step below can run unprivileged. (Canon's own
+        # installer also leaves the bundle owned by the installing user.)
+        echo "chown -R '$USERNAME' '$PLUGIN_DIR'"
+    fi
     echo "chown -R '$USERNAME' '$BACKUP_DIR' 2>/dev/null || true"
 } > "$ROOT_SCRIPT"
 chmod 700 "$ROOT_SCRIPT"
 osascript -e "do shell script \"bash '$ROOT_SCRIPT'\" with administrator privileges"
 rm -f "$ROOT_SCRIPT"
+
+if [ "$SIGN_ID" != "-" ]; then
+    # Sign as the logged-in user so the keychain identity is available.
+    # No hardened runtime: the service must load Canon's EDSDK.framework,
+    # which is signed by a different team; library validation would block it.
+    # Timestamping needs network access, so fall back to no timestamp offline.
+    for BIN in "$PLUGIN_BIN/EOSWebcamUtility" "$PLUGIN_RES/EOSWebcamService" "$PLUGIN_RES/EWCProxy"; do
+        codesign --force --timestamp --sign "$SIGN_ID" "$BIN" 2>/dev/null \
+            || codesign --force --sign "$SIGN_ID" "$BIN"
+    done
+    codesign --force --deep --timestamp --sign "$SIGN_ID" "$PLUGIN_DIR" 2>/dev/null \
+        || codesign --force --deep --sign "$SIGN_ID" "$PLUGIN_DIR"
+fi
 echo "  Patched and signed"
 
 # --- Config ---

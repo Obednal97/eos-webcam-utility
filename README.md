@@ -173,6 +173,7 @@ The logo is automatically scaled to fit (never stretched) and placed above the "
 - **1080p is upscaled** — The camera sends ~1024x576 natively over USB. The 1080p output is upscaled using DCT-domain scaling. True native 1080p requires HDMI output + capture card.
 - **Camera activation takes ~20-30 seconds** — Due to a race condition with macOS's `ptpcamerad` service. The daemon handles this automatically but it takes a few retry cycles.
 - **DAL plugin architecture is deprecated** — Apple deprecated CoreMediaIO DAL plugins at WWDC 2022. The plugin still works on current macOS but may break in future versions. A Camera Extension (CMIOExtension) migration is planned.
+- **macOS 26.5.2 may block the plug-in entirely** — There is a report ([issue #3](https://github.com/Obednal97/eos-webcam-utility/issues/3)) of macOS 26.5.2 refusing to load the ad-hoc-signed plug-in (AMFI code-signature rejections in the system log), while the same setup passes on 26.5.1. This is under investigation and not yet confirmed as a general 26.5.2 change. If the virtual camera disappeared for you after a macOS update, run `bash dist/v1.4/diagnose.sh` and add the report to that issue. There is no safe workaround right now (do **not** disable SIP); the long-term fix is the Camera Extension migration, which needs an Apple Developer certificate (see [work-log/009](work-log/009-camera-extension-investigation.md)).
 - **Apple Silicon only** — The patched binaries are ARM64. Intel Macs are not supported by this fork.
 
 ---

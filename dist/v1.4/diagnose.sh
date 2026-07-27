@@ -96,9 +96,10 @@ CAMS="$(system_profiler SPCameraDataType 2>&1)"
 echo "$CAMS" | grep -vE "Model ID:|Unique ID:"
 
 echo; echo "----- Recent plug-in load logs (last 10 min) -----"
-log show --last 10m --predicate \
-  'eventMessage CONTAINS[c] "EOSWebcam" OR eventMessage CONTAINS[c] "CoreMediaIO" OR eventMessage CONTAINS[c] "DAL plug" OR eventMessage CONTAINS[c] "library validation" OR eventMessage CONTAINS[c] "code signature"' \
-  2>/dev/null | tail -60 || echo "no relevant log entries"
+LOGS="$(log show --last 10m --predicate \
+  'process == "amfid" OR eventMessage CONTAINS[c] "EOSWebcam" OR eventMessage CONTAINS[c] "CoreMediaIO" OR eventMessage CONTAINS[c] "DAL plug" OR eventMessage CONTAINS[c] "library validation" OR eventMessage CONTAINS[c] "code signature"' \
+  2>/dev/null | tail -60)"
+echo "${LOGS:-no relevant log entries}"
 
 echo; echo "----- Camera manager log (last 30 lines) -----"
 tail -30 "$HOME/Library/Logs/eos-camera-manager.log" 2>/dev/null || echo "no manager log found"
@@ -109,9 +110,23 @@ if echo "$CAMS" | grep -q "EOS Webcam Utility"; then
     echo "       If it still doesn't show in a specific app, that app is likely refusing to load"
     echo "       third-party DAL plug-ins. Try a different app (e.g. Zoom, OBS) to confirm,"
     echo "       and make sure the EWCService process above is running so it sends video."
+elif [ ! -d "$PLUGIN" ]; then
+    echo "[FAIL] The plug-in is NOT installed (nothing at $PLUGIN)."
+    echo "       Fix: run the installer ->  bash dist/v1.4/install.sh"
+    echo "       Then reboot and run this diagnostic again."
+elif echo "$LOGS" | grep -qiE "AMFI: code signature validation failed|adhoc signed or signed by an unknown certificate chain|library validation failed"; then
+    echo "[FAIL] The plug-in IS installed and its files look correct, but macOS refused to"
+    echo "       load it: the system log shows code-signature (AMFI) rejections of ad-hoc"
+    echo "       signed code around the time the camera list was opened."
+    echo "       Re-running the installer will NOT fix this — the files on disk are fine;"
+    echo "       it is the OS signing policy that is blocking them."
+    echo "       This has been reported starting with macOS 26.5.2 (see GitHub issue #3:"
+    echo "       https://github.com/Obednal97/eos-webcam-utility/issues/3). Please add"
+    echo "       your macOS version ('sw_vers' output) to that issue so affected"
+    echo "       versions can be tracked."
 else
     echo "[FAIL] macOS does NOT see the virtual camera — the plug-in is not loading."
-    echo "       Most likely: it isn't installed, or wasn't (re)installed after a macOS upgrade."
+    echo "       Most likely: it wasn't (re)installed after a macOS upgrade."
     echo "       Fix: re-run the installer ->  bash dist/v1.4/install.sh"
     echo "       Then reboot and run this diagnostic again."
 fi

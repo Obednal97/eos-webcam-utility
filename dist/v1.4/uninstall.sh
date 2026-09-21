@@ -81,6 +81,13 @@ cp "$BACKUP_DIR/proconfig.plist" "$USER_HOME/Library/Application Support/EWCServ
 # Remove daemon
 echo "[4/4] Removing camera manager..."
 rm -f "$LAUNCH_AGENTS/com.eos-camera-manager.plist"
+# The daemon and its images are installed alongside the config (see install.sh:
+# launchd can't read the clone if it sits in ~/Downloads and friends).
+RUNTIME_DIR="$USER_HOME/Library/Application Support/EWCService"
+rm -f "$RUNTIME_DIR/eos-camera-manager.sh" \
+      "$RUNTIME_DIR/generate-images.sh" \
+      "$RUNTIME_DIR/errorNoDevice_connecting.jpg" \
+      "$RUNTIME_DIR/errorNoDevice_disconnected.jpg" 2>/dev/null || true
 
 # Restart original service
 launchctl load /Library/LaunchAgents/com.canon.usa.EWCService.plist 2>/dev/null || true

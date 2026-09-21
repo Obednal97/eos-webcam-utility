@@ -38,7 +38,7 @@ This fork takes the final free version (v1.3.16) and unlocks 1080p output, adds 
   - **Camera not connected:** "Camera not connected — Please connect your camera or use another camera source"
   - The daemon automatically swaps between these based on whether the camera is detected on USB.
 
-- **Logo Support** — Place a `logo.png` in the install directory and run `generate-images.sh` to overlay your own logo on the loading screens.
+- **Logo Support** — Place a `logo.png` next to the installed daemon and run `generate-images.sh` to overlay your own logo on the loading screens.
 
 ---
 
@@ -155,12 +155,16 @@ Restores original Canon files from the backup created during installation.
 
 ### Custom Logo on Loading Screen
 
+The daemon and its images are installed to `~/Library/Application Support/EWCService/`
+(a LaunchAgent gets no access to `~/Downloads`, `~/Desktop`, `~/Documents` or
+iCloud Drive, so it cannot run from a clone in one of those):
+
 ```bash
-# Place your logo file in the install directory
-cp /path/to/your/logo.png ~/development/webcam-utility/logo.png
+# Place your logo file alongside the installed daemon
+cp /path/to/your/logo.png ~/Library/Application\ Support/EWCService/logo.png
 
 # Regenerate loading screen images with your logo
-~/development/webcam-utility/generate-images.sh
+~/Library/Application\ Support/EWCService/generate-images.sh
 ```
 
 The logo is automatically scaled to fit (never stretched) and placed above the "Connecting to camera..." text. PNG with transparency is supported.

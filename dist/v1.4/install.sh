@@ -36,8 +36,13 @@ USER_HOME="$HOME"
 USERNAME="$(whoami)"
 SUPPORT_DIR="$USER_HOME/Library/Application Support/EWCService"
 LAUNCH_AGENTS="$USER_HOME/Library/LaunchAgents"
-# Install the daemon/images into the clone this script was run from.
+# Backups go next to the clone this script was run from.
 INSTALL_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+# The daemon and its images must live somewhere launchd can actually read them.
+# A LaunchAgent gets no TCC access to ~/Downloads, ~/Desktop, ~/Documents or
+# iCloud Drive, so running the daemon out of the clone fails with "Operation not
+# permitted"; Application Support is outside TCC's reach.
+RUNTIME_DIR="$SUPPORT_DIR"
 LOG_DIR="$USER_HOME/Library/Logs"
 
 # Canon's official EOS Webcam Utility v1.3.16 (still hosted by Canon as of 2026-07).
@@ -322,18 +327,20 @@ PROEOF
 echo "  Config: 1920x1080 @ 30fps"
 
 # Camera manager daemon
-mkdir -p "$INSTALL_DIR"
-cp "$SCRIPT_DIR/eos-camera-manager.sh" "$INSTALL_DIR/"
-chmod +x "$INSTALL_DIR/eos-camera-manager.sh"
-echo "  Daemon: $INSTALL_DIR/eos-camera-manager.sh"
+mkdir -p "$RUNTIME_DIR"
+cp "$SCRIPT_DIR/eos-camera-manager.sh" "$RUNTIME_DIR/"
+chmod +x "$RUNTIME_DIR/eos-camera-manager.sh"
+echo "  Daemon: $RUNTIME_DIR/eos-camera-manager.sh"
 
-# Loading screens
+# Loading screens. The daemon and the generator both resolve images relative to
+# themselves, so all three live together in the runtime dir — regenerating with
+# your own logo there is picked up without another copy step.
 if [ -d "$SCRIPT_DIR/images" ]; then
-    cp "$SCRIPT_DIR/images/"*.jpg "$INSTALL_DIR/" 2>/dev/null || true
-    cp "$SCRIPT_DIR/images/generate-images.sh" "$INSTALL_DIR/" 2>/dev/null || true
-    chmod +x "$INSTALL_DIR/generate-images.sh" 2>/dev/null || true
-    if [ -f "$INSTALL_DIR/errorNoDevice_connecting.jpg" ]; then
-        cp "$INSTALL_DIR/errorNoDevice_connecting.jpg" "$PLUGIN_RES/errorNoDevice.jpg" 2>/dev/null || true
+    cp "$SCRIPT_DIR/images/"*.jpg "$RUNTIME_DIR/" 2>/dev/null || true
+    cp "$SCRIPT_DIR/images/generate-images.sh" "$RUNTIME_DIR/" 2>/dev/null || true
+    chmod +x "$RUNTIME_DIR/generate-images.sh" 2>/dev/null || true
+    if [ -f "$RUNTIME_DIR/errorNoDevice_connecting.jpg" ]; then
+        cp "$RUNTIME_DIR/errorNoDevice_connecting.jpg" "$PLUGIN_RES/errorNoDevice.jpg" 2>/dev/null || true
     fi
     echo "  Custom loading screens installed"
 fi
@@ -351,7 +358,7 @@ cat > "$LAUNCH_AGENTS/com.eos-camera-manager.plist" << LAEOF
 	<key>ProgramArguments</key>
 	<array>
 		<string>/bin/bash</string>
-		<string>${INSTALL_DIR}/eos-camera-manager.sh</string>
+		<string>${RUNTIME_DIR}/eos-camera-manager.sh</string>
 	</array>
 	<key>RunAtLoad</key>
 	<true/>
@@ -373,8 +380,10 @@ sleep 1
 launchctl load "$LAUNCH_AGENTS/com.eos-camera-manager.plist" 2>/dev/null || true
 INSTALL_COMPLETE=1
 
-SVC=$(launchctl list 2>/dev/null | grep -c "com.canon.usa.EWCService" || true)
-MGR=$(launchctl list 2>/dev/null | grep -c "com.eos-camera-manager" || true)
+# A label appears in `launchctl list` even when its job is failing to start, so
+# check the PID column (field 1, "-" when not running) rather than mere presence.
+SVC=$(launchctl list 2>/dev/null | awk '$3=="com.canon.usa.EWCService" && $1!="-"' | wc -l | tr -d ' ')
+MGR=$(launchctl list 2>/dev/null | awk '$3=="com.eos-camera-manager" && $1!="-"' | wc -l | tr -d ' ')
 
 echo ""
 echo "============================================"
@@ -395,8 +404,8 @@ echo "    3. Select 'EOS Webcam Utility' as camera"
 echo "    4. Camera connects automatically (~20-30s)"
 echo ""
 echo "  Custom logo (optional):"
-echo "    1. Place logo.png in $INSTALL_DIR/"
-echo "    2. Run: $INSTALL_DIR/generate-images.sh"
+echo "    1. Place logo.png in $RUNTIME_DIR/"
+echo "    2. Run: '$RUNTIME_DIR/generate-images.sh'"
 echo ""
 echo "  Uninstall: bash $SCRIPT_DIR/uninstall.sh"
 echo "============================================"

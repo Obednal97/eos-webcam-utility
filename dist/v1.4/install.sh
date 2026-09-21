@@ -67,8 +67,10 @@ done
 SERVICES_STOPPED=0
 INSTALL_COMPLETE=0
 WORK=""
+STAGE=""
 cleanup() {
     [ -n "$WORK" ] && rm -rf "$WORK" 2>/dev/null || true
+    [ -n "$STAGE" ] && rm -rf "$STAGE" 2>/dev/null || true
     if [ "$INSTALL_COMPLETE" != 1 ] && [ "$SERVICES_STOPPED" = 1 ]; then
         echo ""
         echo "  Install did not finish — restarting Canon's service so your existing"
@@ -236,15 +238,25 @@ echo "  Done"
 
 # --- Install (if needed), snapshot originals, patch, sign (single admin step) ---
 echo "[6/8] Installing Canon base (if needed), patching, and signing..."
-ROOT_SCRIPT="$(mktemp -t eoswc-deploy)"
+# The elevated shell osascript spawns inherits no TCC access to user folders
+# (~/Downloads, ~/Desktop, ~/Documents, iCloud Drive...), so reading the patcher
+# or writing backups there fails with "Operation not permitted" even as root.
+# Everything root touches is staged through the temp dir instead, and moved back
+# by this (unelevated) shell afterwards.
+STAGE="$(mktemp -d -t eoswc-stage)"
+cp "$PATCHER" "$STAGE/patch-binaries.py"
+mkdir -p "$STAGE/orig"
+if [ "$NEED_INSTALLER" = 1 ]; then
+    cp "$PKG_FILE" "$STAGE/canon.pkg"
+fi
+ROOT_SCRIPT="$STAGE/deploy.sh"
 {
     echo '#!/bin/bash'
     echo 'set -e'
-    [ "$NEED_INSTALLER" = 1 ] && echo "installer -pkg '$PKG_FILE' -target /"
+    [ "$NEED_INSTALLER" = 1 ] && echo "installer -pkg '$STAGE/canon.pkg' -target /"
     # Snapshot the pristine originals before patching so uninstall can restore them.
-    echo "mkdir -p '$BACKUP_DIR'"
-    echo "for f in '$PLUGIN_BIN/EOSWebcamUtility' '$PLUGIN_RES/EOSWebcamService' '$PLUGIN_RES/EWCProxy' '$PLUGIN_RES/EWCPairingService' '$PLUGIN_RES/errorNoDevice.jpg' '$PLUGIN_RES/errorBusy.jpg' '$PLUGIN_RES/default.jpg'; do [ -e \"\$f\" ] && cp \"\$f\" '$BACKUP_DIR/' 2>/dev/null || true; done"
-    echo "/usr/bin/python3 '$PATCHER' '$PLUGIN_DIR/Contents'"
+    echo "for f in '$PLUGIN_BIN/EOSWebcamUtility' '$PLUGIN_RES/EOSWebcamService' '$PLUGIN_RES/EWCProxy' '$PLUGIN_RES/EWCPairingService' '$PLUGIN_RES/errorNoDevice.jpg' '$PLUGIN_RES/errorBusy.jpg' '$PLUGIN_RES/default.jpg'; do [ -e \"\$f\" ] && cp \"\$f\" '$STAGE/orig/' 2>/dev/null || true; done"
+    echo "/usr/bin/python3 '$STAGE/patch-binaries.py' '$PLUGIN_DIR/Contents'"
     echo "chmod 755 '$PLUGIN_BIN/EOSWebcamUtility' '$PLUGIN_RES/EOSWebcamService' '$PLUGIN_RES/EWCProxy'"
     echo "chmod 666 '$PLUGIN_RES/errorNoDevice.jpg' 2>/dev/null || true"
     echo "chmod 666 '$PLUGIN_RES/errorBusy.jpg' 2>/dev/null || true"
@@ -253,11 +265,16 @@ ROOT_SCRIPT="$(mktemp -t eoswc-deploy)"
     echo "codesign --force --sign - '$PLUGIN_RES/EOSWebcamService'"
     echo "codesign --force --sign - '$PLUGIN_RES/EWCProxy'"
     echo "codesign --force --deep --sign - '$PLUGIN_DIR'"
-    echo "chown -R '$USERNAME' '$BACKUP_DIR' 2>/dev/null || true"
+    echo "chown -R '$USERNAME' '$STAGE/orig' 2>/dev/null || true"
 } > "$ROOT_SCRIPT"
 chmod 700 "$ROOT_SCRIPT"
 osascript -e "do shell script \"bash '$ROOT_SCRIPT'\" with administrator privileges"
-rm -f "$ROOT_SCRIPT"
+# Pull the snapshots back out of staging (this shell does have folder access).
+for f in "$STAGE/orig/"*; do
+    [ -e "$f" ] && cp "$f" "$BACKUP_DIR/" 2>/dev/null || true
+done
+rm -rf "$STAGE"
+STAGE=""
 echo "  Patched and signed"
 
 # --- Config ---

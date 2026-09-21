@@ -41,19 +41,36 @@ sleep 1
 
 # Restore binaries
 echo "[2/4] Restoring original binaries (admin required)..."
+# The elevated shell osascript spawns has no TCC access to user folders
+# (~/Downloads, ~/Desktop, ~/Documents, iCloud Drive...), so it cannot read the
+# backup where it sits — "Operation not permitted", even as root. Stage the
+# files through the temp dir, which is outside TCC's reach.
+STAGE="$(mktemp -d -t eoswc-restore)"
+trap '[ -n "$STAGE" ] && rm -rf "$STAGE" 2>/dev/null || true' EXIT
+for f in EOSWebcamUtility EOSWebcamService EWCProxy errorNoDevice.jpg errorBusy.jpg default.jpg; do
+    cp "$BACKUP_DIR/$f" "$STAGE/$f" 2>/dev/null || true
+done
+for f in EOSWebcamUtility EOSWebcamService EWCProxy; do
+    if [ ! -e "$STAGE/$f" ]; then
+        echo "ERROR: backup is missing $f — cannot restore."
+        exit 1
+    fi
+done
 osascript -e "do shell script \"
-cp '$BACKUP_DIR/EOSWebcamUtility' '$PLUGIN_DIR/Contents/MacOS/EOSWebcamUtility'
-cp '$BACKUP_DIR/EOSWebcamService' '$PLUGIN_DIR/Contents/Resources/EOSWebcamService'
-cp '$BACKUP_DIR/EWCProxy' '$PLUGIN_DIR/Contents/Resources/EWCProxy'
-cp '$BACKUP_DIR/errorNoDevice.jpg' '$PLUGIN_DIR/Contents/Resources/errorNoDevice.jpg' 2>/dev/null
-cp '$BACKUP_DIR/errorBusy.jpg' '$PLUGIN_DIR/Contents/Resources/errorBusy.jpg' 2>/dev/null
-cp '$BACKUP_DIR/default.jpg' '$PLUGIN_DIR/Contents/Resources/default.jpg' 2>/dev/null
+cp '$STAGE/EOSWebcamUtility' '$PLUGIN_DIR/Contents/MacOS/EOSWebcamUtility'
+cp '$STAGE/EOSWebcamService' '$PLUGIN_DIR/Contents/Resources/EOSWebcamService'
+cp '$STAGE/EWCProxy' '$PLUGIN_DIR/Contents/Resources/EWCProxy'
+cp '$STAGE/errorNoDevice.jpg' '$PLUGIN_DIR/Contents/Resources/errorNoDevice.jpg' 2>/dev/null
+cp '$STAGE/errorBusy.jpg' '$PLUGIN_DIR/Contents/Resources/errorBusy.jpg' 2>/dev/null
+cp '$STAGE/default.jpg' '$PLUGIN_DIR/Contents/Resources/default.jpg' 2>/dev/null
 codesign --force --sign - '$PLUGIN_DIR/Contents/MacOS/EOSWebcamUtility'
 codesign --force --sign - '$PLUGIN_DIR/Contents/Resources/EOSWebcamService'
 codesign --force --sign - '$PLUGIN_DIR/Contents/Resources/EWCProxy'
 codesign --force --deep --sign - '$PLUGIN_DIR'
 \" with administrator privileges"
 
+rm -rf "$STAGE"
+STAGE=""
 echo "  Original binaries restored"
 
 # Restore configs

@@ -108,6 +108,35 @@ eoswc_refuse_root() {
     fi
 }
 
+# Check, before anything is stopped or changed, that every tool the scripts
+# need is there and that python3 really runs. On a Mac without the Command
+# Line Tools, /usr/bin/python3 is only a shim that pops up an install dialog
+# (and fails), so it is not even started unless xcode-select reports a
+# developer dir. The admin step runs /usr/bin/python3; this shell runs the
+# python3 on PATH; both must work. Extra tool names can be passed as args.
+eoswc_require_tools() {
+    local t missing=""
+    for t in osascript launchctl codesign plutil shasum ditto pkill xcode-select "$@"; do
+        command -v "$t" >/dev/null 2>&1 || missing="$missing $t"
+    done
+    if [ -n "$missing" ]; then
+        echo "  ERROR: required tool(s) not found:$missing"
+        echo "         Nothing was changed."
+        return 1
+    fi
+    if ! xcode-select -p >/dev/null 2>&1; then
+        echo "  ERROR: python3 needs Apple's Command Line Tools, which aren't installed."
+        echo "         Run 'xcode-select --install', then re-run this. Nothing was changed."
+        return 1
+    fi
+    if ! /usr/bin/python3 -c 'import sys; sys.exit(0)' >/dev/null 2>&1 ||
+       ! python3 -c 'import sys; sys.exit(0)' >/dev/null 2>&1; then
+        echo "  ERROR: python3 is installed but doesn't run. Run 'xcode-select --install'"
+        echo "         (or fix the python3 on your PATH), then re-run this. Nothing was changed."
+        return 1
+    fi
+}
+
 # True if launchd has a live process for the job. A label shows up in
 # `launchctl list` even while its job is failing to start (PID column "-"),
 # so mere presence is not enough. Columns: PID, last exit status, label.

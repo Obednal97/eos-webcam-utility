@@ -31,9 +31,11 @@ PLUGIN_DIR="$EOSWC_PLUGIN"
 SUPPORT_DIR="$EOSWC_RUNTIME_DIR"
 BACKUP_ROOT="$EOSWC_BACKUP_ROOT"
 LAUNCH_AGENT_SYS="/Library/LaunchAgents/com.canon.usa.EWCService.plist"
-if ! command -v python3 >/dev/null 2>&1 || [ ! -f "$PATCHER" ]; then
-    echo "ERROR: python3 and patch-binaries.py (next to this script) are needed to"
-    echo "       check the backup. Nothing was changed."
+# Every tool, and a python3 that really runs, before anything is changed.
+eoswc_require_tools || exit 1
+if [ ! -f "$PATCHER" ]; then
+    echo "ERROR: patch-binaries.py (next to this script) is needed to check the"
+    echo "       backup. Nothing was changed."
     exit 1
 fi
 

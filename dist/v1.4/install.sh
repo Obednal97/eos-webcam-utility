@@ -115,10 +115,13 @@ if [ "$ARCH" != "arm64" ]; then
     echo "  ERROR: Requires Apple Silicon (arm64). Detected: $ARCH"
     exit 1
 fi
-if ! command -v python3 >/dev/null 2>&1; then
-    echo "  ERROR: python3 is required (ships with macOS developer tools). Run 'xcode-select --install'."
-    exit 1
-fi
+# Every tool, and a python3 that really runs, before anything is changed.
+NEED_TOOLS=""
+[ -d "$PLUGIN_DIR" ] || NEED_TOOLS="installer"
+[ -n "$USER_PKG" ] && NEED_TOOLS="$NEED_TOOLS pkgutil"
+[ -d "$PLUGIN_DIR" ] || [ -n "$USER_PKG" ] || NEED_TOOLS="$NEED_TOOLS curl"
+# shellcheck disable=SC2086  # a list of tool names
+eoswc_require_tools $NEED_TOOLS || exit 1
 if [ ! -f "$PATCHER" ]; then
     echo "  ERROR: patch-binaries.py not found next to this script."
     exit 1

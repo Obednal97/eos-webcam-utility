@@ -194,7 +194,8 @@ if [ "$SOURCE" = "installed" ]; then
 else
     WORK="$(mktemp -d -t eoswc)"
     if [ "$SOURCE" = "userpkg" ]; then
-        if [ ! -f "$USER_PKG" ]; then
+        # -e, not -f: a bundle-style .pkg is a directory.
+        if [ ! -e "$USER_PKG" ]; then
             echo "  ERROR: --pkg file not found: $USER_PKG"
             exit 1
         fi

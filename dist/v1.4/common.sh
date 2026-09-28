@@ -68,7 +68,7 @@ eoswc_old_clone_dir() {
 }
 
 # Files a backup dir can hold; the first three are the ones that matter.
-EOSWC_BACKUP_FILES="EOSWebcamUtility EOSWebcamService EWCProxy EWCPairingService errorNoDevice.jpg errorBusy.jpg default.jpg config.plist proconfig.plist"
+EOSWC_BACKUP_FILES="EOSWebcamUtility EOSWebcamService EWCProxy EWCPairingService errorNoDevice.jpg errorNoDevice.owner errorBusy.jpg default.jpg config.plist proconfig.plist"
 
 # Copy backup dir $1 (outside Application Support, e.g. an old clone's
 # backups/) into EOSWC_BACKUP_ROOT under the same name, so it outlives that

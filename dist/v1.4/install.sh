@@ -618,6 +618,12 @@ ROOT_SCRIPT="$STAGE/deploy.sh"
     # shell's EXIT trap deletes staging, so an installer that stopped (e.g.
     # killed) while root ran leaves root without it. That is not a bad backup.
     STAGE_GONE_CHECK="[ -f $Q_PATCHER ] || { echo 'ERROR: the installer staging folder disappeared while the admin step was running (the installer was stopped part-way), so the check could not run; nothing was patched. Re-run the installer.' >&2; exit 1; };"
+    # errorNoDevice.jpg is re-owned below (to you); record the owner Canon's
+    # file has now (Canon ships it as uid 502:staff) so uninstall can put it
+    # back. Only while the plug-in still holds Canon's originals, and never
+    # over an existing record.
+    Q_NODEV_OWNER="$(eoswc_sq "$BACKUP_DIR/errorNoDevice.owner")"
+    RECORD_NODEV_OWNER="[ ! -e $(eoswc_sq "$PLUGIN_RES/errorNoDevice.jpg") ] || [ -s $Q_NODEV_OWNER ] || stat -f '%u:%g' $(eoswc_sq "$PLUGIN_RES/errorNoDevice.jpg") > $Q_NODEV_OWNER || true"
     case "$SNAPSHOT" in
     new)
         # Back up the pristine originals and verify the backup before patching:
@@ -628,6 +634,7 @@ ROOT_SCRIPT="$STAGE/deploy.sh"
         for f in EWCPairingService errorNoDevice.jpg errorBusy.jpg default.jpg; do
             echo "[ ! -e $(eoswc_sq "$PLUGIN_RES/$f") ] || cp $(eoswc_sq "$PLUGIN_RES/$f") $Q_BACKUP/ 2>/dev/null || true"
         done
+        echo "$RECORD_NODEV_OWNER"
         echo "chown -R $(eoswc_sq "$USERNAME") $Q_BACKUP 2>/dev/null || true"
         echo "/usr/bin/python3 $Q_PATCHER --check-original $Q_BACKUP || { $STAGE_GONE_CHECK echo 'ERROR: the backup does not hold complete original Canon v1.3.16 binaries; nothing was patched.' >&2; exit 1; }" ;;
     reuse)
@@ -635,6 +642,8 @@ ROOT_SCRIPT="$STAGE/deploy.sh"
         for f in "$PLUGIN_BIN/EOSWebcamUtility" "$PLUGIN_RES/EOSWebcamService" "$PLUGIN_RES/EWCProxy"; do
             echo "cmp -s $(eoswc_sq "$f") $(eoswc_sq "$BACKUP_DIR/$(basename "$f")") || { echo 'ERROR: $(basename "$f") no longer matches the backup; nothing was patched. Re-run the installer.' >&2; exit 1; }"
         done
+        echo "$RECORD_NODEV_OWNER"
+        echo "chown $(eoswc_sq "$USERNAME") $(eoswc_sq "$BACKUP_DIR/errorNoDevice.owner") 2>/dev/null || true"
         echo "/usr/bin/python3 $Q_PATCHER --check-original $Q_BACKUP || { $STAGE_GONE_CHECK echo 'ERROR: the backup does not hold complete original Canon v1.3.16 binaries; nothing was patched.' >&2; exit 1; }" ;;
     none)
         # No backup was taken, so only go on if there is nothing left to patch.

@@ -96,6 +96,26 @@ test_override_installs_with_a_loud_warning() {
     holds_patched "$EOSWC_PLUGIN_DIR/Contents" || fail "plug-in not patched"
 }
 
+# A bundle-style .pkg can't be checked against the pin at all: the override
+# still takes it, and the warning (saying why) comes before the password
+# prompt, so the user can still cancel.
+test_override_takes_a_bundle_pkg_and_warns_before_the_prompt() {
+    PKG="$HOME/Downloads/Canon.pkg"
+    mkdir -p "$PKG/Contents"
+    echo '<plist/>' > "$PKG/Contents/Info.plist"
+    export STUB_PKGUTIL_SIG=canon
+    run_install --pkg "$PKG" --allow-unverified-pkg; assert_status "$RC" 0
+    assert_contains "$OUT" "!! WARNING: --allow-unverified-pkg: using a package that FAILED checks. !!"
+    assert_contains "$OUT" "bundle-style (folder) package"
+    assert_contains "$OUT" "Cancel the password prompt"
+    local warn prompt
+    warn="$(grep -nF "WARNING: --allow-unverified-pkg" "$OUT" | head -1 | cut -d: -f1)"
+    prompt="$(grep -nF "[3/8] Requesting admin privileges" "$OUT" | head -1 | cut -d: -f1)"
+    [ -n "$warn" ] && [ -n "$prompt" ] && [ "$warn" -lt "$prompt" ] || fail "warning not shown before the admin prompt"
+    assert_contains "$STUB_LOG" "installer-kind bundle"
+    holds_patched "$EOSWC_PLUGIN_DIR/Contents" || fail "plug-in not patched"
+}
+
 test_override_needs_a_pkg() {
     make_canon_install
     run_install --allow-unverified-pkg

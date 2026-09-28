@@ -67,4 +67,72 @@ test_uninstall_repairs_world_writable_jpegs() {
     assert_same "$RES/errorBusy.jpg" "$b/errorBusy.jpg"
 }
 
+# The installer re-owns errorNoDevice.jpg, so it records the owner it had
+# (Canon's bundle ships it as uid 502:staff) in the backup, and uninstall
+# puts that owner back.
+backup_with_canon_files() {
+    local b
+    b="$(backup_root)/$1"
+    mkdir -p "$b"
+    /usr/bin/python3 "$FIXTURES/make-canon-plugin.py" "$SANDBOX/canon"
+    cp "$SANDBOX/canon/Contents/MacOS/EOSWebcamUtility" "$SANDBOX/canon/Contents/Resources/"* "$b/"
+    echo "$b"
+}
+
+test_install_records_the_original_owner_of_errorNoDevice() {
+    make_canon_install
+    local want b
+    want="$(stat -f %u:%g "$RES/errorNoDevice.jpg")"
+    run_install; assert_status "$RC" 0
+    b="$(latest_backup)"
+    assert_file "$b/errorNoDevice.owner"
+    [ "$(cat "$b/errorNoDevice.owner" 2>/dev/null)" = "$want" ] ||
+        fail "recorded owner '$(cat "$b/errorNoDevice.owner" 2>/dev/null)', expected $want"
+    # Recorded before root re-owned the file.
+    local rec chown
+    rec="$(grep -nF "errorNoDevice.owner" "$STUB_LOG" | grep -v '^[0-9]*:#' | head -1 | cut -d: -f1)"
+    chown="$(grep -nE "^chown $(whoami):staff $RES/errorNoDevice\.jpg$" "$STUB_LOG" | head -1 | cut -d: -f1)"
+    [ -n "$rec" ] && [ -n "$chown" ] && [ "$rec" -lt "$chown" ] || fail "owner not recorded before the chown"
+}
+
+test_reused_backup_gets_the_owner_recorded_too() {
+    make_canon_install
+    local b
+    b="$(backup_root)/pre-v1.4.1-20260101-100000"
+    mkdir -p "$b"
+    cp "$BIN/EOSWebcamUtility" "$RES/EOSWebcamService" "$RES/EWCProxy" "$b/"
+    run_install; assert_status "$RC" 0
+    assert_contains "$OUT" "already backed up in $b"
+    [ "$(cat "$b/errorNoDevice.owner" 2>/dev/null)" = "$(stat -f %u:%g "$ORIG/Contents/Resources/errorNoDevice.jpg")" ] ||
+        fail "owner not recorded in the reused backup"
+}
+
+test_uninstall_restores_the_recorded_owner_of_errorNoDevice() {
+    make_canon_install --patched
+    local b
+    b="$(backup_with_canon_files pre-v1.4.1-20260101-100000)"
+    echo "502:20" > "$b/errorNoDevice.owner"
+    run_uninstall; assert_status "$RC" 0
+    assert_log_matches "^chown 502:20 $RES/errorNoDevice\.jpg$"
+    assert_same "$RES/errorNoDevice.jpg" "$b/errorNoDevice.jpg"
+}
+
+test_uninstall_ignores_a_malformed_owner_record() {
+    make_canon_install --patched
+    local b
+    b="$(backup_with_canon_files pre-v1.4.1-20260101-100000)"
+    printf '502:20; touch %s/pwned\n' "$SANDBOX" > "$b/errorNoDevice.owner"
+    run_uninstall; assert_status "$RC" 0
+    assert_no_file "$SANDBOX/pwned"
+    ! grep -qE "^chown [^ ]* $RES/errorNoDevice\.jpg$" "$STUB_LOG" || fail "chowned from a malformed record"
+    assert_contains "$OUT" "not restoring the owner of errorNoDevice.jpg"
+}
+
+test_uninstall_without_an_owner_record_leaves_the_owner() {
+    make_canon_install --patched
+    backup_with_canon_files pre-v1.4.1-20260101-100000 >/dev/null
+    run_uninstall; assert_status "$RC" 0
+    ! grep -qE "^chown [^ ]* $RES/errorNoDevice\.jpg$" "$STUB_LOG" || fail "chowned without a record"
+}
+
 run_tests

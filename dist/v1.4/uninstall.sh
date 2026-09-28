@@ -287,6 +287,18 @@ RESTORE_SCRIPT="$STAGE/restore.sh"
         if cp "$BACKUP_DIR/$f" "$STAGE/$f" 2>/dev/null; then
             echo "cp $(eoswc_sq "$STAGE/$f") $(eoswc_sq "$PLUGIN_DIR/Contents/Resources/$f")"
         fi
+        # The installer gave errorNoDevice.jpg to you; give it back to the
+        # owner it had before (recorded in the backup). The record is only a
+        # uid:gid pair, checked here, since root runs the chown.
+        if [ "$f" = errorNoDevice.jpg ] && [ -f "$BACKUP_DIR/errorNoDevice.owner" ]; then
+            NODEV_OWNER="$(head -1 "$BACKUP_DIR/errorNoDevice.owner" 2>/dev/null)" || NODEV_OWNER=""
+            if printf '%s\n' "$NODEV_OWNER" | grep -qE '^[0-9]{1,10}:[0-9]{1,10}$'; then
+                echo "[ ! -e $(eoswc_sq "$PLUGIN_DIR/Contents/Resources/$f") ] || chown $(eoswc_sq "$NODEV_OWNER") $(eoswc_sq "$PLUGIN_DIR/Contents/Resources/$f")"
+            else
+                echo "Note: $BACKUP_DIR/errorNoDevice.owner isn't a uid:gid pair;" >&2
+                echo "      not restoring the owner of errorNoDevice.jpg." >&2
+            fi
+        fi
         # Older installers left these world-writable (666); cp keeps that.
         echo "[ ! -e $(eoswc_sq "$PLUGIN_DIR/Contents/Resources/$f") ] || chmod 644 $(eoswc_sq "$PLUGIN_DIR/Contents/Resources/$f")"
     done

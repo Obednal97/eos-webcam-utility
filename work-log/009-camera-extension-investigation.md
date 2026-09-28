@@ -144,8 +144,12 @@ It missed that Canon's own v1.3.16 package already contains one. Expanding
   makes `installer` report failure. `install.sh` now treats exactly that case
   as non-fatal (see the H4 fix in the installer-safety PR).
 - `/Applications/EOS Webcam Utility/EOS Webcam Utility Uninstaller.app`
-  removes all of Canon's software, running the host app to deactivate the
-  extension first.
+  references the host app, which suggested it deactivates the extension. It
+  doesn't: in a VM test (macOS 26, v1.3.16) it removed only the DAL plug-in
+  and `~/Library/Application Support/EOS-Webcam-Utility/temp`, and the
+  extension stayed active. The ways to remove the extension are to turn it
+  off in System Settings > General > Login Items & Extensions > Camera
+  Extensions, or to move its host app to the Trash in Finder.
 
 Once approved, the extension shows up as a second "EOS Webcam Utility" camera
 next to the fork's patched DAL plug-in. The fork doesn't patch the extension.

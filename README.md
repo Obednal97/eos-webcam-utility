@@ -168,13 +168,16 @@ asks you to approve that extension, and reports an error if you don't.
   plug-in and Canon's Camera Extension, which the fork doesn't patch or test.
   Which of the two shows the fork's 1080p output hasn't been checked on a real
   Mac yet; if you find out, please open an issue.
-- **Uninstall doesn't remove it.** `uninstall.sh` restores Canon's software
-  rather than removing it, and the extension is part of that. It tells you if
-  the extension is there. To remove it, open Canon's own
-  `EOS Webcam Utility Uninstaller` in `/Applications/EOS Webcam Utility/`
-  (removes all of Canon's software), or turn just the extension off in System
-  Settings > General > Login Items & Extensions > Camera Extensions. The fork
-  never removes it for you: that needs your approval, and
+- **Uninstall doesn't remove it, and neither does Canon's uninstaller.**
+  `uninstall.sh` restores Canon's software rather than removing it, and the
+  extension is part of that. It tells you if the extension is there. Canon's
+  own `EOS Webcam Utility Uninstaller` deletes the DAL plug-in (and
+  `~/Library/Application Support/EOS-Webcam-Utility/temp`) but, as a VM test
+  showed, leaves the extension active. To remove it, turn it off in System
+  Settings > General > Login Items & Extensions > Camera Extensions, or in
+  Finder move `/Applications/EOS Webcam Utility/EOS Webcam Camera Extension
+  Installer.app` (its host app) to the Trash, which makes macOS remove the
+  extension. The fork never removes it for you: that needs your approval, and
   `systemextensionsctl uninstall` only works with SIP disabled.
 
 `diagnose.sh` reports whether the host app is installed and the extension's

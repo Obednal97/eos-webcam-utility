@@ -7,6 +7,17 @@
 # never try to remove it themselves.
 . "$(dirname "$0")/helpers.sh"
 
+# The removal advice, as the VM showed it has to be: Canon's uninstaller
+# deletes the DAL plug-in but leaves the extension active, so it is never
+# offered as the way to remove it. Takes the file to check.
+assert_extension_removal_advice() {
+    assert_contains "$1" "Login Items & Extensions > Camera Extensions"
+    assert_contains "$1" "EOS Webcam Camera Extension Installer.app\" to the Trash"
+    assert_contains "$1" "Uninstaller does NOT remove it"
+    assert_lacks "$1" "Canon uninstaller removes it"
+    assert_contains "$1" "needs SIP disabled"
+}
+
 fresh_pinned_pkg() {
     printf 'xar!fake flat package\n' > "$HOME/Downloads/Canon.pkg"
     pin_test_pkg "$HOME/Downloads/Canon.pkg"
@@ -35,8 +46,7 @@ test_unapproved_extension_does_not_stop_a_fresh_install() {
     assert_contains "$OUT" "Canon's Camera Extension: not registered"
     assert_contains "$OUT" "reported an error only because this extension"
     assert_contains "$OUT" "SECOND camera called"
-    assert_contains "$OUT" "EOS Webcam Utility Uninstaller.app"
-    assert_contains "$OUT" "Login Items & Extensions > Camera Extensions"
+    assert_extension_removal_advice "$OUT"
 }
 
 test_installer_failure_on_macos_13_is_fatal() {
@@ -98,11 +108,26 @@ test_uninstall_reports_the_extension_and_leaves_it() {
     run_uninstall; assert_status "$RC" 0
     assert_contains "$OUT" "Canon's Camera Extension is still installed (activated enabled)"
     assert_contains "$OUT" "second 'EOS Webcam Utility' camera"
-    assert_contains "$OUT" "EOS Webcam Utility Uninstaller.app"
-    assert_contains "$OUT" "needs SIP disabled"
+    assert_extension_removal_advice "$OUT"
     [ -d "$EOSWC_CANON_APP_DIR/EOS Webcam Camera Extension Installer.app" ] || fail "the extension host app was removed"
     assert_contains "$STUB_LOG" "systemextensionsctl list"
     assert_lacks "$STUB_LOG" "systemextensionsctl uninstall"
+}
+
+# VM scenario 9: Canon's uninstaller ran first. The DAL plug-in is gone, the
+# extension is still active: uninstall still says how to remove it.
+test_uninstall_after_canons_uninstaller_reports_the_active_extension() {
+    mkdir -p "$EOSWC_CANON_APP_DIR/EOS Webcam Camera Extension Installer.app/Contents"
+    mkdir -p "$RUNTIME"
+    echo fork > "$RUNTIME/eos-camera-manager.sh"
+    printf '<string>%s/eos-camera-manager.sh</string>\n' "$RUNTIME" > "$AGENT"
+    export STUB_SYSEXT_STATE="activated enabled"
+    run_uninstall; assert_status "$RC" 0
+    assert_contains "$OUT" "Nothing was restored"
+    assert_contains "$OUT" "Canon's Camera Extension is still installed (activated enabled)"
+    assert_extension_removal_advice "$OUT"
+    assert_lacks "$STUB_LOG" "systemextensionsctl uninstall"
+    [ -d "$EOSWC_CANON_APP_DIR/EOS Webcam Camera Extension Installer.app" ] || fail "the extension host app was removed"
 }
 
 test_uninstall_without_the_extension_says_nothing() {
@@ -123,7 +148,7 @@ test_diagnose_reports_an_unapproved_extension() {
     assert_contains "$r" "state (systemextensionsctl): activated waiting for user"
     assert_contains "$r" "installed but not approved"
     assert_contains "$r" "To remove the Canon Camera Extension"
-    assert_contains "$r" "EOS Webcam Utility Uninstaller.app"
+    assert_extension_removal_advice "$r"
 }
 
 test_diagnose_without_the_extension() {

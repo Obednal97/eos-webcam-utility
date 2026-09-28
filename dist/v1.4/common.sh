@@ -231,16 +231,37 @@ eoswc_camera_extension_state() {
 
 # How to remove Canon's Camera Extension. Printed, never done for the user:
 # deactivating a system extension needs the user's own approval, and
-# `systemextensionsctl uninstall` only works with SIP disabled. (No "X's "
-# possessives: diagnose.sh's name redaction would mangle them.)
+# `systemextensionsctl uninstall` only works with SIP disabled. Canon's
+# uninstaller is NOT a way to do it: a VM test showed it deletes the DAL
+# plug-in and ~/Library/Application Support/EOS-Webcam-Utility/temp but
+# leaves the extension active. macOS removes a system extension when its
+# host app is moved to the Trash in Finder. (No "X's " possessives:
+# diagnose.sh's name redaction would mangle them.)
 eoswc_camera_extension_removal_help() {
     local apps="${EOSWC_CANON_APPS:-$EOSWC_REAL_CANON_APP_DIR}"
     echo "$1To remove the Canon Camera Extension (the fork never does this for you):"
-    echo "$1  - The Canon uninstaller removes it along with the rest of the Canon"
-    echo "$1    software: open \"$apps/$EOSWC_CANON_UNINSTALLER\"."
-    echo "$1  - Or keep the Canon software and turn just the extension off in System"
-    echo "$1    Settings > General > Login Items & Extensions > Camera Extensions."
+    echo "$1  - Turn it off in System Settings > General >"
+    echo "$1    Login Items & Extensions > Camera Extensions."
+    echo "$1  - Or remove it with its host app: in Finder, move"
+    echo "$1    \"$apps/$EOSWC_CAMEXT_HOST\" to the Trash."
+    echo "$1  The EOS Webcam Utility Uninstaller does NOT remove it: it deletes"
+    echo "$1  the plug-in but leaves the extension active."
     echo "$1  (\`systemextensionsctl uninstall\` needs SIP disabled; do not do that.)"
+}
+
+# If Canon's Camera Extension is still there (host app or registered),
+# print that and how to remove it. $1: a word for what just ran.
+eoswc_report_camera_extension() {
+    local apps="${EOSWC_CANON_APPS:-$EOSWC_REAL_CANON_APP_DIR}" state
+    state="$(eoswc_camera_extension_state)"
+    if [ -d "$apps/$EOSWC_CAMEXT_HOST" ] ||
+       { [ "$state" != "not registered" ] && [ "$state" != unknown ]; }; then
+        echo ""
+        echo "  Canon's Camera Extension is still installed ($state). It is part"
+        echo "  of Canon's software, which this $1 leaves in place; if approved"
+        echo "  it shows up as a second 'EOS Webcam Utility' camera."
+        eoswc_camera_extension_removal_help "  "
+    fi
 }
 
 # Refuse to run as root. The scripts ask for admin rights themselves, for one

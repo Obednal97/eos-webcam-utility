@@ -31,7 +31,6 @@ eoswc_refuse_root || exit 1
 eoswc_select_plugin_dir || exit 1
 PLUGIN_DIR="$EOSWC_PLUGIN"
 eoswc_select_canon_app_dir || exit 1
-CANON_APPS="$EOSWC_CANON_APPS"
 # Canon's config dir, which is also where install.sh puts the daemon.
 SUPPORT_DIR="$EOSWC_RUNTIME_DIR"
 BACKUP_ROOT="$EOSWC_BACKUP_ROOT"
@@ -144,6 +143,8 @@ if [ ! -e "$PLUGIN_DIR" ]; then
     else
         echo "  No backup of Canon's original binaries was found in $SEARCHED."
     fi
+    # Canon's uninstaller leaves its Camera Extension active.
+    eoswc_report_camera_extension uninstaller
     echo "============================================"
     exit 0
 fi
@@ -347,13 +348,5 @@ echo "  Backups kept (delete them yourself once you're happy):"
 echo "    $BACKUP_DIR"
 # This restores Canon's software; it doesn't remove it. That includes Canon's
 # Camera Extension (macOS 14+), which a fresh install may have added.
-CAMEXT_STATE="$(eoswc_camera_extension_state)"
-if [ -d "$CANON_APPS/$EOSWC_CAMEXT_HOST" ] ||
-   { [ "$CAMEXT_STATE" != "not registered" ] && [ "$CAMEXT_STATE" != unknown ]; }; then
-    echo ""
-    echo "  Canon's Camera Extension is still installed ($CAMEXT_STATE). It is part"
-    echo "  of Canon's software, which this uninstaller leaves in place; if approved"
-    echo "  it shows up as a second 'EOS Webcam Utility' camera."
-    eoswc_camera_extension_removal_help "  "
-fi
+eoswc_report_camera_extension uninstaller
 echo "============================================"

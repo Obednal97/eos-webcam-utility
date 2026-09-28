@@ -132,6 +132,15 @@ wait_for_root_step() {
 }
 # echo that can't fail: stdout may be a closed pipe by now (`install.sh | head`).
 say() { printf '%s\n' "$@" 2>/dev/null || true; }
+# The admin step writes its output to $STAGE/root.log (see the root script).
+# Show it once it is done; cleanup keeps it in ~/Library/Logs if it wasn't.
+ROOT_LOG_SHOWN=0
+ADMIN_LOG="$LOG_DIR/eos-webcam-utility-admin-step.log"
+show_root_log() {
+    [ -n "$STAGE" ] && [ -s "$STAGE/root.log" ] || return 0
+    cat "$STAGE/root.log" 2>/dev/null || true
+    ROOT_LOG_SHOWN=1
+}
 
 # True if SHA-256 $1 is a pinned checksum of Canon's v1.3.16 package.
 pkg_sha_pinned() {
@@ -196,7 +205,7 @@ verify_user_pkg() {
 # the Canon .pkg, the root script): Canon's originals go straight from the
 # plug-in into BACKUP_DIR, so deleting staging can never lose them.
 cleanup() {
-    local root_busy=0 reloaded=0
+    local root_busy=0 reloaded=0 kept_log=0
     trap '' INT TERM HUP PIPE
     set +e
     # Never restart Canon's service under a patch still in progress.
@@ -208,6 +217,11 @@ cleanup() {
         reloaded=1
     fi
     [ -n "$WORK" ] && rm -rf "$WORK" 2>/dev/null
+    # Keep the admin step's output if it was never shown (e.g. Ctrl-C).
+    if [ -n "$STAGE" ] && [ "$root_busy" = 0 ] && [ "$ROOT_LOG_SHOWN" != 1 ] && [ -s "$STAGE/root.log" ]; then
+        mkdir -p "$LOG_DIR" 2>/dev/null
+        cp "$STAGE/root.log" "$ADMIN_LOG" 2>/dev/null && kept_log=1
+    fi
     [ -n "$STAGE" ] && [ "$root_busy" = 0 ] && rm -rf "$STAGE" 2>/dev/null
     if [ "$reloaded" = 1 ]; then
         say "" "  Install did not finish — restarting Canon's service and the camera manager" \
@@ -216,8 +230,10 @@ cleanup() {
     if [ "$root_busy" = 1 ]; then
         say "" "  Install interrupted while the admin step was still running. Services were" \
             "  left stopped so it isn't disturbed mid-patch. Wait a minute, then re-run" \
-            "  the installer (it checks what state the plug-in is in first)."
+            "  the installer (it checks what state the plug-in is in first)." \
+            "  Its output so far: $STAGE/root.log"
     fi
+    [ "$kept_log" = 1 ] && say "  The admin step's output is in $ADMIN_LOG"
     return 0
 }
 trap cleanup EXIT
@@ -533,13 +549,52 @@ ROOT_SCRIPT="$STAGE/deploy.sh"
     # process group) or TERM must never stop the patcher half-way. root.pid
     # and root.exit let this shell's cleanup see whether it is still running.
     echo "trap '' INT TERM HUP"
-    echo "echo \$\$ > $(eoswc_sq "$STAGE/root.pid")"
-    echo "root_done() { echo \"\$?\" > $(eoswc_sq "$STAGE/root.exit"); }"
-    echo "trap root_done EXIT"
     # Every value interpolated into these lines is shell-quoted (eoswc_sq):
     # $HOME and the user name end up in root's command line.
     Q_PATCHER="$(eoswc_sq "$STAGE/patch-binaries.py")"
     Q_BACKUP="$(eoswc_sq "$BACKUP_DIR")"
+    # Everything root prints goes to a log in staging, which this shell shows
+    # afterwards, never down osascript's pipe: if osascript dies (Ctrl-C
+    # reaches it too), that pipe closes, and the next write would kill the
+    # patcher or codesign part-way, leaving a patched plug-in with invalid
+    # signatures (seen in the VM: BrokenPipeError, then set -e).
+    echo "exec > $(eoswc_sq "$STAGE/root.log") 2>&1"
+    echo "echo \$\$ > $(eoswc_sq "$STAGE/root.pid")"
+    # If a step fails once patching has started, don't leave the plug-in
+    # half-patched or unsigned: with a verified backup, copy Canon's originals
+    # back (they carry Canon's own signatures); with none (the plug-in was
+    # already patched), re-sign what is there.
+    echo "PATCHING=0"
+    echo "root_done() {"
+    echo "    rc=\$?"
+    echo "    set +e"
+    echo "    if [ \"\$rc\" != 0 ] && [ \"\$PATCHING\" = 1 ]; then"
+    if [ "$SNAPSHOT" != none ]; then
+        ROLLED_BACK_TEST=""
+        for f in MacOS/EOSWebcamUtility Resources/EOSWebcamService Resources/EWCProxy; do
+            Q_B="$(eoswc_sq "$BACKUP_DIR/${f#*/}")"; Q_P="$(eoswc_sq "$PLUGIN_DIR/Contents/$f")"
+            echo "        cmp -s $Q_B $Q_P || cp $Q_B $Q_P"
+            ROLLED_BACK_TEST="$ROLLED_BACK_TEST && cmp -s $Q_B $Q_P"
+        done
+        echo "        if true$ROLLED_BACK_TEST; then"
+        echo "            echo 'A step failed after patching started: rolled back, the plug-in holds the Canon originals again (from the verified backup).'"
+        echo "            : > $(eoswc_sq "$STAGE/rolled-back")"
+        echo "        else"
+        echo "            echo 'ERROR: a step failed after patching started, and rolling back from the backup failed too.'"
+        echo "        fi"
+    else
+        for f in "$PLUGIN_BIN/EOSWebcamUtility" "$PLUGIN_RES/EOSWebcamService" "$PLUGIN_RES/EWCProxy"; do
+            echo "        codesign --force --sign - $(eoswc_sq "$f")"
+        done
+        echo "        if codesign --force --deep --sign - $(eoswc_sq "$PLUGIN_DIR"); then"
+        echo "            echo 'A step failed after patching started: re-signed the plug-in.'"
+        echo "            : > $(eoswc_sq "$STAGE/re-signed")"
+        echo "        fi"
+    fi
+    echo "    fi"
+    echo "    echo \"\$rc\" > $(eoswc_sq "$STAGE/root.exit")"
+    echo "}"
+    echo "trap root_done EXIT"
     if [ "$NEED_INSTALLER" = 1 ]; then
         echo "installer_rc=0"
         echo "installer -pkg $(eoswc_sq "$STAGE/canon.pkg") -target / || installer_rc=\$?"
@@ -585,6 +640,7 @@ ROOT_SCRIPT="$STAGE/deploy.sh"
         # No backup was taken, so only go on if there is nothing left to patch.
         echo "/usr/bin/python3 $Q_PATCHER --check-patched $(eoswc_sq "$PLUGIN_DIR/Contents") || { $STAGE_GONE_CHECK echo 'ERROR: the plug-in is not fully patched and no backup was taken; nothing was patched. Re-run the installer.' >&2; exit 1; }" ;;
     esac
+    echo "PATCHING=1"
     echo "/usr/bin/python3 $Q_PATCHER $(eoswc_sq "$PLUGIN_DIR/Contents")"
     echo "chmod 755 $(eoswc_sq "$PLUGIN_BIN/EOSWebcamUtility") $(eoswc_sq "$PLUGIN_RES/EOSWebcamService") $(eoswc_sq "$PLUGIN_RES/EWCProxy")"
     # Canon's loading-screen JPEGs. Older installers made all three
@@ -607,10 +663,19 @@ ROOT_SCRIPT="$STAGE/deploy.sh"
     echo "codesign --force --deep --sign - $(eoswc_sq "$PLUGIN_DIR")"
 } > "$ROOT_SCRIPT"
 chmod 700 "$ROOT_SCRIPT"
-if ! osascript -e "do shell script \"bash '$ROOT_SCRIPT'\" with administrator privileges"; then
+ROOT_OK=1
+osascript -e "do shell script \"bash '$ROOT_SCRIPT'\" with administrator privileges" || ROOT_OK=0
+show_root_log
+if [ "$ROOT_OK" = 0 ]; then
     echo ""
     echo "  ERROR: the admin step failed (see above)."
-    if [ "$SNAPSHOT" != none ] && python3 "$PATCHER" --check-original "$BACKUP_DIR" >/dev/null 2>&1; then
+    if [ -e "$STAGE/rolled-back" ]; then
+        echo "  Canon's original binaries are safe in $BACKUP_DIR"
+        echo "  (verified), and the half-done patch was rolled back: the plug-in holds"
+        echo "  them again. Re-run the installer to try again."
+    elif [ -e "$STAGE/re-signed" ]; then
+        echo "  The plug-in was re-signed after the failed step. Re-run the installer."
+    elif [ "$SNAPSHOT" != none ] && python3 "$PATCHER" --check-original "$BACKUP_DIR" >/dev/null 2>&1; then
         # The backup is verified before the patcher runs, so the patcher may
         # have run and stopped part-way.
         echo "  Canon's original binaries are safe in $BACKUP_DIR"

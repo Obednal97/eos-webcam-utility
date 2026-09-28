@@ -188,8 +188,17 @@ wait_for_root_step() {
 }
 # echo that can't fail: stdout may be a closed pipe by now.
 say() { printf '%s\n' "$@" 2>/dev/null || true; }
+# The admin step's output ($STAGE/root.log), shown once it is done; on_exit
+# keeps it in ~/Library/Logs if it never was.
+ROOT_LOG_SHOWN=0
+ADMIN_LOG="$USER_HOME/Library/Logs/eos-webcam-utility-admin-step.log"
+show_root_log() {
+    [ -n "$STAGE" ] && [ -s "$STAGE/root.log" ] || return 0
+    cat "$STAGE/root.log" 2>/dev/null || true
+    ROOT_LOG_SHOWN=1
+}
 on_exit() {
-    local root_busy=0 reloaded=0
+    local root_busy=0 reloaded=0 kept_log=0
     trap '' INT TERM HUP PIPE
     set +e
     # Never restart the services under a restore still in progress.
@@ -200,6 +209,10 @@ on_exit() {
         # The camera manager only if the fork's binaries may still be there.
         [ "$RESTORED" != 1 ] && [ -f "$AGENT_PLIST" ] && launchctl load "$AGENT_PLIST" 2>/dev/null
         reloaded=1
+    fi
+    if [ -n "$STAGE" ] && [ "$root_busy" = 0 ] && [ "$ROOT_LOG_SHOWN" != 1 ] && [ -s "$STAGE/root.log" ]; then
+        mkdir -p "$(dirname "$ADMIN_LOG")" 2>/dev/null
+        cp "$STAGE/root.log" "$ADMIN_LOG" 2>/dev/null && kept_log=1
     fi
     [ -n "$STAGE" ] && [ "$root_busy" = 0 ] && rm -rf "$STAGE" 2>/dev/null
     if [ "$root_busy" = 1 ]; then
@@ -225,6 +238,7 @@ on_exit() {
         fi
         say "  Your backup is untouched: $BACKUP_DIR"
     fi
+    [ "$kept_log" = 1 ] && say "  The admin step's output is in $ADMIN_LOG"
     return 0
 }
 trap on_exit EXIT
@@ -259,6 +273,9 @@ RESTORE_SCRIPT="$STAGE/restore.sh"
     echo 'set -e'
     # Once started, run to the end (see install.sh): never a half restore.
     echo "trap '' INT TERM HUP"
+    # Output to a log, never down osascript's pipe (see install.sh): codesign
+    # reports on stderr, and a closed pipe would kill it mid-restore.
+    echo "exec > $(eoswc_sq "$STAGE/root.log") 2>&1"
     echo "echo \$\$ > $(eoswc_sq "$STAGE/root.pid")"
     echo "root_done() { echo \"\$?\" > $(eoswc_sq "$STAGE/root.exit"); }"
     echo "trap root_done EXIT"
@@ -293,7 +310,10 @@ sleep 1
 # Restore binaries
 echo "[2/4] Restoring original binaries (admin required)..."
 RESTORE_STARTED=1
-if ! osascript -e "do shell script \"bash '$RESTORE_SCRIPT'\" with administrator privileges"; then
+ROOT_OK=1
+osascript -e "do shell script \"bash '$RESTORE_SCRIPT'\" with administrator privileges" || ROOT_OK=0
+show_root_log
+if [ "$ROOT_OK" = 0 ]; then
     echo "ERROR: the admin step was cancelled or failed (see above)."
     exit 1
 fi

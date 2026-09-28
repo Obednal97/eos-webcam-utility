@@ -139,4 +139,81 @@ test_term_during_the_uninstall_admin_step_waits_for_it() {
     holds_originals "$EOSWC_PLUGIN_DIR/Contents" || fail "the restore did not run to the end"
 }
 
+# VM: Ctrl-C at the patch step killed osascript, which closed root's stdout
+# pipe. Root ignores SIGINT, but the patcher then died of BrokenPipeError and
+# set -e stopped root before codesign: patched, with an invalid signature.
+# Root's output now goes to a log in staging, shown afterwards.
+test_install_admin_step_survives_a_closed_stdout() {
+    make_canon_install
+    export STUB_ROOT_STDOUT_CLOSED=1
+    run_install; assert_status "$RC" 0
+    holds_patched "$EOSWC_PLUGIN_DIR/Contents" || fail "plug-in not patched"
+    assert_log_matches "^codesign --force --deep --sign - /"
+    assert_lacks "$OUT" "BrokenPipeError"
+    # Root's own output, shown from its log once it's done.
+    assert_contains "$OUT" "patched:         MacOS/EOSWebcamUtility"
+    assert_contains "$OUT" "Installation complete!"
+}
+
+# The same with stderr closed too: codesign reports re-signing on stderr.
+test_install_admin_step_survives_closed_stdout_and_stderr() {
+    make_canon_install
+    export STUB_ROOT_STDOUT_CLOSED=both
+    run_install; assert_status "$RC" 0
+    holds_patched "$EOSWC_PLUGIN_DIR/Contents" || fail "plug-in not patched"
+    assert_log_matches "^codesign --force --deep --sign - /"
+    assert_contains "$OUT" "replacing existing signature"
+}
+
+test_uninstall_admin_step_survives_closed_stdout_and_stderr() {
+    fork_install
+    backup_of_originals
+    export STUB_ROOT_STDOUT_CLOSED=both
+    run_uninstall; assert_status "$RC" 0
+    holds_originals "$EOSWC_PLUGIN_DIR/Contents" || fail "plug-in not restored"
+    assert_log_matches "^codesign --force --deep --sign - /"
+    assert_contains "$OUT" "replacing existing signature"
+    assert_contains "$OUT" "Uninstall complete."
+}
+
+# A step after the patcher fails (here codesign): with a verified backup,
+# root copies Canon's originals back rather than leave a patched plug-in
+# with invalid signatures.
+test_failed_signing_rolls_back_to_the_originals() {
+    make_canon_install
+    export STUB_FAIL_CMD_ONCE=codesign
+    run_install; assert_status "$RC" 1
+    holds_originals "$EOSWC_PLUGIN_DIR/Contents" || fail "plug-in not rolled back"
+    assert_same "$RES/EWCProxy" "$ORIG/Contents/Resources/EWCProxy"
+    assert_contains "$OUT" "rolled back"
+    assert_lacks "$OUT" "Installation complete!"
+}
+
+# The same over an already patched fork (no backup taken): root re-signs.
+test_failed_signing_over_the_fork_re_signs() {
+    fork_install
+    export STUB_FAIL_CMD_ONCE=codesign
+    run_install; assert_status "$RC" 1
+    local failed resigned
+    failed="$(first_line "codesign-failed")"
+    resigned="$(last_line_re "^codesign --force --deep --sign - /")"
+    [ -n "$failed" ] && [ -n "$resigned" ] && [ "$resigned" -gt "$failed" ] ||
+        fail "the plug-in was not re-signed after the failed step"
+    assert_contains "$OUT" "re-signed"
+    holds_patched "$EOSWC_PLUGIN_DIR/Contents" || fail "plug-in changed"
+}
+
+# Interrupted (osascript killed) while root ran: its output is kept in
+# ~/Library/Logs, since staging is deleted and it was never shown.
+test_interrupted_install_keeps_the_admin_step_log() {
+    make_canon_install
+    export STUB_OSASCRIPT_DETACH=1 STUB_SLOW_CMD=codesign
+    run_install
+    wait_detached
+    assert_status "$RC" 143
+    assert_file "$HOME/Library/Logs/eos-webcam-utility-admin-step.log"
+    assert_contains "$HOME/Library/Logs/eos-webcam-utility-admin-step.log" "patched:         MacOS/EOSWebcamUtility"
+    assert_contains "$OUT" "eos-webcam-utility-admin-step.log"
+}
+
 run_tests

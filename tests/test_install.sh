@@ -171,7 +171,11 @@ test_failed_patch_keeps_verified_originals_in_app_support() {
     chmod 444 "$RES/EOSWebcamService"
     run_install; assert_status "$RC" 1
     assert_contains "$OUT" "Permission denied"
-    assert_differs "$BIN/EOSWebcamUtility" "$ORIG/Contents/MacOS/EOSWebcamUtility"
+    # Root rolled the half-patched plug-in back from the verified backup
+    # instead of leaving EOSWebcamUtility patched with a broken signature.
+    assert_same "$BIN/EOSWebcamUtility" "$ORIG/Contents/MacOS/EOSWebcamUtility"
+    holds_originals "$EOSWC_PLUGIN_DIR/Contents" || fail "plug-in not rolled back to Canon's originals"
+    assert_contains "$OUT" "rolled back"
     # The originals were backed up and verified before patching; they survive
     # outside staging, and the failure says where they are.
     assert_backup_of_originals "$(latest_backup)"

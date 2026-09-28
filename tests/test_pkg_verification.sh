@@ -110,7 +110,7 @@ test_override_takes_a_bundle_pkg_and_warns_before_the_prompt() {
     assert_contains "$OUT" "Cancel the password prompt"
     local warn prompt
     warn="$(grep -nF "WARNING: --allow-unverified-pkg" "$OUT" | head -1 | cut -d: -f1)"
-    prompt="$(grep -nF "[3/8] Requesting admin privileges" "$OUT" | head -1 | cut -d: -f1)"
+    prompt="$(grep -nF "macOS asks for your admin password now" "$OUT" | head -1 | cut -d: -f1)"
     [ -n "$warn" ] && [ -n "$prompt" ] && [ "$warn" -lt "$prompt" ] || fail "warning not shown before the admin prompt"
     assert_contains "$STUB_LOG" "installer-kind bundle"
     holds_patched "$EOSWC_PLUGIN_DIR/Contents" || fail "plug-in not patched"

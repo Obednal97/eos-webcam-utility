@@ -535,4 +535,41 @@ test_says_so_when_usb_cannot_be_listed() {
     assert_lacks "$(report)" "No Canon device on USB"
 }
 
+# The helpers' signatures: this version's install signs them ad hoc with the
+# hardened runtime; Canon's are team NC5A977249. Only flags, team and
+# entitlement names are shown.
+test_reports_the_helpers_signatures() {
+    installed_layout
+    make_canon_install --patched
+    run_diagnose; assert_status "$RC" 0
+    local r; r="$(report)"
+    assert_contains "$r" "----- Service and EWCProxy signatures -----"
+    assert_contains "$r" "EWCProxy: flags=0x10002(adhoc,runtime) team=not set entitlements: com.apple.security.cs.disable-library-validation com.apple.security.device.camera"
+    assert_contains "$r" "crash reports of the service or EWCProxy in the last 7 days: 0 (0 about code signing or library loading)"
+    assert_lacks "$r" "crashed with a code-signing"
+}
+
+test_canon_signed_helpers_show_canons_team() {
+    installed_layout
+    make_canon_install
+    run_diagnose; assert_status "$RC" 0
+    assert_contains "$(report)" "EOSWebcamService: flags=0x10000(runtime) team=NC5A977249"
+}
+
+# A helper that can't load EDSDK (library validation) dies at launch: the
+# crash reports say so, and the verdict warns. Only counts are reported.
+test_warns_about_code_signing_crashes_of_the_helpers() {
+    installed_layout
+    make_canon_install --patched
+    mkdir -p "$HOME/Library/Logs/DiagnosticReports"
+    printf 'Termination Reason: Namespace DYLD, Code 1 Library missing\n(mapping process and mapped file (non-platform) have different Team IDs) /Users/secretname/x\n' \
+        > "$HOME/Library/Logs/DiagnosticReports/EWCProxy-2026-09-28-101010.ips"
+    echo "unrelated" > "$HOME/Library/Logs/DiagnosticReports/EOSWebcamService-2026-09-28-101011.ips"
+    run_diagnose; assert_status "$RC" 0
+    local r; r="$(report)"
+    assert_contains "$r" "crash reports of the service or EWCProxy in the last 7 days: 2 (1 about code signing or library loading)"
+    assert_contains "$r" "[WARN] EOSWebcamService or EWCProxy crashed with a code-signing or library-loading"
+    assert_lacks "$r" "secretname"
+}
+
 run_tests

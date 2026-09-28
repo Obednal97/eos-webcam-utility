@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Entitlements install.sh signs the patched EOSWebcamService and EWCProxy
+  with (ad hoc, with the hardened runtime, as Canon signs them).
+  - com.apple.security.device.camera: Canon's own entitlement, unchanged.
+  - com.apple.security.cs.disable-library-validation: both binaries load
+    Canon's EDSDK.framework (Team ID NC5A977249). Under the hardened runtime,
+    library validation only lets a process load libraries with its own Team
+    ID, and an ad hoc signature has none, so without this the service and
+    EWCProxy could not start ("mapping process and mapped file (non-platform)
+    have different Team IDs"). Canon's own signature doesn't need it: there,
+    both carry Canon's Team ID.
+-->
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.cs.disable-library-validation</key>
+	<true/>
+	<key>com.apple.security.device.camera</key>
+	<true/>
+</dict>
+</plist>

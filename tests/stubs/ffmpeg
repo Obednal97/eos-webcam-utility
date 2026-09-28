@@ -1,0 +1,36 @@
+#!/bin/bash
+# Test stub for ffmpeg: never opens a camera or any device. Plays back
+# recorded ffmpeg output (tests/fixtures/ffmpeg/<scenario>/) for the three
+# calls measure-fps.sh makes:
+#   -list_devices true         -> devices.txt on stderr, exit 1 (as ffmpeg does)
+#   -video_size 9999x9999      -> modes.txt on stderr, exit 1 (as ffmpeg does)
+#   ... -f framemd5 -          -> capture.err on stderr, frames.txt on stdout
+# STUB_FFMPEG_SCENARIO: the fixture dir name (default: after).
+# STUB_FFMPEG_DIR: a fixture dir inside the test sandbox instead.
+# STUB_FFMPEG_CAPTURE_FAIL=1: the capture fails as it does when macOS denies
+# the terminal camera access.
+echo "ffmpeg $*" >> "${STUB_LOG:?STUB_LOG not set}"
+dir="${STUB_FFMPEG_DIR:-${FIXTURES:?}/ffmpeg/${STUB_FFMPEG_SCENARIO:-after}}"
+case "$dir" in
+    "${FIXTURES:?}"/ffmpeg/*|"${EOSWC_TEST_SANDBOX:?}"/*) ;;
+    *) echo "ffmpeg stub: fixture dir outside the tests: $dir" >&2; exit 2 ;;
+esac
+case " $* " in
+    *" -list_devices true "*)
+        cat "$dir/devices.txt" >&2
+        exit 1 ;;
+    *" -video_size 9999x9999 "*)
+        cat "$dir/modes.txt" >&2
+        exit 1 ;;
+    *" -f framemd5 - ")
+        if [ -n "${STUB_FFMPEG_CAPTURE_FAIL:-}" ]; then
+            echo "[AVFoundation indev @ 0x13b604290] Failed to create AV capture input device: Cannot use EOS Webcam Utility" >&2
+            echo "[in#0 @ 0x13b604000] Error opening input: Input/output error" >&2
+            exit 1
+        fi
+        cat "$dir/capture.err" >&2
+        cat "$dir/frames.txt"
+        exit 0 ;;
+esac
+echo "ffmpeg stub: unexpected arguments: $*" >&2
+exit 2

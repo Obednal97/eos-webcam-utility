@@ -1,1 +1,23 @@
-noop
+#!/bin/bash
+# Test stub for codesign: records the call, then signs, displays or verifies
+# the FAKE binaries' fake signatures (fixtures/fake_codesign.py, fakesig.py),
+# so tests can check which signature a file ends up with. Never touches a
+# path outside the test sandbox.
+# STUB_SLOW_CMD=codesign: each call takes half a second (to widen races).
+[ "${STUB_SLOW_CMD:-}" = codesign ] && /bin/sleep 0.5
+# STUB_FAIL_CMD_ONCE=codesign: the first call fails (logged as
+# "codesign-failed"); later calls run normally.
+if [ "${STUB_FAIL_CMD_ONCE:-}" = codesign ] &&
+   [ ! -e "${EOSWC_TEST_SANDBOX:?}/failed-once-codesign" ]; then
+    : > "$EOSWC_TEST_SANDBOX/failed-once-codesign"
+    echo "codesign-failed $*" >> "${STUB_LOG:?STUB_LOG not set}"
+    echo "codesign: simulated failure" >&2
+    exit 1
+fi
+# Like the real codesign, report re-signing on stderr (before the call is
+# logged, so a codesign that dies writing it isn't logged as done).
+if [ "${1:-}" = --force ]; then
+    echo "${*: -1}: replacing existing signature" >&2
+fi
+echo "codesign $*" >> "${STUB_LOG:?STUB_LOG not set}"
+exec /usr/bin/python3 -B "${FIXTURES:?}/fake_codesign.py" "$@"

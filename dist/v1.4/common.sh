@@ -70,6 +70,23 @@ eoswc_old_clone_dir() {
 # Files a backup dir can hold; the first three are the ones that matter.
 EOSWC_BACKUP_FILES="EOSWebcamUtility EOSWebcamService EWCProxy EWCPairingService errorNoDevice.jpg errorNoDevice.owner errorBusy.jpg default.jpg config.plist proconfig.plist"
 
+# Backups made by this version also hold the whole signed plug-in bundle, as
+# ditto copied it (_CodeSignature, Info.plist, the binaries, the images), so
+# uninstall can put Canon's plug-in back byte for byte, with Canon's own
+# signature, instead of re-signing copies of the binaries. The flat files
+# above are hard links into it (older uninstallers read those). plugin.owner
+# is the plug-in's owner (uid:gid) when it was backed up.
+EOSWC_BUNDLE_BACKUP="EOSWebcamUtility.plugin"
+
+# Canon signs its binaries with its Developer ID, Team ID NC5A977249.
+EOSWC_CANON_TEAM="NC5A977249"
+EOSWC_CANON_REQ="=anchor apple generic and certificate leaf[subject.OU] = $EOSWC_CANON_TEAM"
+
+# True if code (a file or bundle) $1 verifies, strictly, as signed by Canon.
+eoswc_canon_signed() {
+    codesign --verify --deep --strict -R "$EOSWC_CANON_REQ" "$1" >/dev/null 2>&1
+}
+
 # Copy backup dir $1 (outside Application Support, e.g. an old clone's
 # backups/) into EOSWC_BACKUP_ROOT under the same name, so it outlives that
 # clone. $2 is patch-binaries.py. The copy is written under a temporary name,

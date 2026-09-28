@@ -1,0 +1,10 @@
+[AVFoundation indev @ 0x14be04290] Selected video size (9999x9999) is not supported by the device.
+[AVFoundation indev @ 0x14be04290] Supported modes:
+[AVFoundation indev @ 0x14be04290]   1920x1080@[60.000000 60.000000]fps
+[AVFoundation indev @ 0x14be04290]   1280x720@[60.000000 60.000000]fps
+[AVFoundation indev @ 0x14be04290]   1080x1920@[60.000000 60.000000]fps
+[AVFoundation indev @ 0x14be04290]   1760x1328@[60.000000 60.000000]fps
+[AVFoundation indev @ 0x14be04290]   640x480@[60.000000 60.000000]fps
+[in#0 @ 0x14be04000] Error opening input: Input/output error
+Error opening input file 1:none.
+Error opening input files: Input/output error

@@ -226,7 +226,7 @@ on_exit() {
     elif [ "$reloaded" = 1 ]; then
         say "" "  Uninstall did not finish — restarting services."
         if [ "$RESTORE_STARTED" != 1 ] ||
-           python3 "$PATCHER" --check-patched "$PLUGIN_DIR/Contents" >/dev/null 2>&1; then
+           python3 "$PATCHER" --check-fork "$PLUGIN_DIR/Contents" >/dev/null 2>&1; then
             say "  Nothing was restored: the fork is still installed and working." \
                 "  Re-run the uninstaller to try again."
         elif python3 "$PATCHER" --check-original "$PLUGIN_DIR/Contents" >/dev/null 2>&1; then
@@ -256,18 +256,53 @@ trap 'exit 129' HUP
 # outside TCC's reach, and verify the staged copies: they are what root copies.
 # This happens before anything is stopped.
 STAGE="$(mktemp -d -t eoswc-restore)"
-for f in EOSWebcamUtility EOSWebcamService EWCProxy; do
-    if ! cp "$BACKUP_DIR/$f" "$STAGE/$f"; then
-        echo "ERROR: could not read $f from the backup — nothing was changed."
+# Backups made by this version hold Canon's whole signed plug-in bundle
+# ($EOSWC_BUNDLE_BACKUP). That is put back byte for byte, so the plug-in has
+# Canon's own signature again and nothing is re-signed. Older backups hold
+# only the three binaries: those are copied back and the bundle re-signed.
+RESTORE_MODE=binaries
+STAGED_BUNDLE="$STAGE/$EOSWC_BUNDLE_BACKUP"
+if [ -d "$BACKUP_DIR/$EOSWC_BUNDLE_BACKUP" ] && [ ! -L "$BACKUP_DIR/$EOSWC_BUNDLE_BACKUP" ]; then
+    if ditto "$BACKUP_DIR/$EOSWC_BUNDLE_BACKUP" "$STAGED_BUNDLE" &&
+       python3 "$PATCHER" --check-original "$STAGED_BUNDLE/Contents" >/dev/null 2>&1 &&
+       codesign --verify --deep --strict "$STAGED_BUNDLE" >/dev/null 2>&1; then
+        RESTORE_MODE=bundle
+    else
+        echo "Note: the plug-in bundle in this backup doesn't verify (its signature or"
+        echo "      Canon's binaries in it), so only the three binaries are restored."
+    fi
+fi
+if [ "$RESTORE_MODE" = bundle ]; then
+    if eoswc_canon_signed "$STAGED_BUNDLE"; then
+        echo "The backup holds Canon's signed plug-in: it goes back byte for byte, with"
+        echo "Canon's own signature (Team ID $EOSWC_CANON_TEAM). Nothing is re-signed."
+    else
+        echo "The backup holds the whole plug-in as it was before the install: it goes"
+        echo "back byte for byte, with the signature it had then. Nothing is re-signed."
+    fi
+else
+    for f in EOSWebcamUtility EOSWebcamService EWCProxy; do
+        if ! cp "$BACKUP_DIR/$f" "$STAGE/$f"; then
+            echo "ERROR: could not read $f from the backup — nothing was changed."
+            exit 1
+        fi
+    done
+    if ! python3 "$PATCHER" --check-original "$STAGE"; then
+        echo "ERROR: the staged copy of the backup failed verification — nothing was changed."
         exit 1
     fi
-done
-if ! python3 "$PATCHER" --check-original "$STAGE"; then
-    echo "ERROR: the staged copy of the backup failed verification — nothing was changed."
-    exit 1
+    cp "$SCRIPT_DIR/fork-entitlements.plist" "$STAGE/entitlements.plist" 2>/dev/null || true
+    echo "This backup was made by an older installer and holds Canon's three binaries,"
+    echo "not the plug-in's signature files. EOSWebcamService and EWCProxy keep the"
+    echo "signatures they have in the backup (Canon's); the plug-in bundle itself is"
+    echo "re-signed ad hoc. To get Canon's signed plug-in back exactly, reinstall"
+    echo "Canon's v1.3.16 package afterwards:"
+    echo "  https://downloads.canon.com/webcam/EOSWebcamUtility-MAC1.3.16.pkg.zip"
 fi
-# Root copies the binaries, then the images the backup has, then re-signs.
-# set -e: any failed step stops it, and it is reported as a failure below.
+echo ""
+# Root copies the plug-in (or the binaries and images) back, puts the owners
+# back and, for an older backup only, re-signs. set -e: any failed step stops
+# it, and it is reported as a failure below.
 RESTORE_SCRIPT="$STAGE/restore.sh"
 {
     echo '#!/bin/bash'
@@ -280,17 +315,35 @@ RESTORE_SCRIPT="$STAGE/restore.sh"
     echo "echo \$\$ > $(eoswc_sq "$STAGE/root.pid")"
     echo "root_done() { echo \"\$?\" > $(eoswc_sq "$STAGE/root.exit"); }"
     echo "trap root_done EXIT"
-    for f in MacOS/EOSWebcamUtility Resources/EOSWebcamService Resources/EWCProxy; do
-        echo "cp $(eoswc_sq "$STAGE/${f#*/}") $(eoswc_sq "$PLUGIN_DIR/Contents/$f")"
-    done
+    if [ "$RESTORE_MODE" = bundle ]; then
+        echo "ditto $(eoswc_sq "$STAGED_BUNDLE") $(eoswc_sq "$PLUGIN_DIR")"
+        # ditto gave every file the staged copy's owner (you). Put back the
+        # owner the plug-in had when it was backed up, on exactly the files
+        # the backup has. The record is only a uid:gid pair, checked here,
+        # since root runs the chown.
+        PLUGIN_OWNER="$(head -1 "$BACKUP_DIR/plugin.owner" 2>/dev/null)" || PLUGIN_OWNER=""
+        if printf '%s\n' "$PLUGIN_OWNER" | grep -qE '^[0-9]{1,10}:[0-9]{1,10}$'; then
+            while IFS= read -r -d '' rel; do
+                rel="${rel#.}"
+                echo "chown -h $(eoswc_sq "$PLUGIN_OWNER") $(eoswc_sq "$PLUGIN_DIR$rel")"
+            done < <(cd "$STAGED_BUNDLE" && find . -print0)
+        elif [ -n "$PLUGIN_OWNER" ]; then
+            echo "Note: $BACKUP_DIR/plugin.owner isn't a uid:gid pair;" >&2
+            echo "      not restoring the plug-in's owner." >&2
+        fi
+    else
+        for f in MacOS/EOSWebcamUtility Resources/EOSWebcamService Resources/EWCProxy; do
+            echo "cp $(eoswc_sq "$STAGE/${f#*/}") $(eoswc_sq "$PLUGIN_DIR/Contents/$f")"
+        done
+    fi
     for f in errorNoDevice.jpg errorBusy.jpg default.jpg; do
-        if cp "$BACKUP_DIR/$f" "$STAGE/$f" 2>/dev/null; then
+        if [ "$RESTORE_MODE" != bundle ] && cp "$BACKUP_DIR/$f" "$STAGE/$f" 2>/dev/null; then
             echo "cp $(eoswc_sq "$STAGE/$f") $(eoswc_sq "$PLUGIN_DIR/Contents/Resources/$f")"
         fi
         # The installer gave errorNoDevice.jpg to you; give it back to the
         # owner it had before (recorded in the backup). The record is only a
         # uid:gid pair, checked here, since root runs the chown.
-        if [ "$f" = errorNoDevice.jpg ] && [ -f "$BACKUP_DIR/errorNoDevice.owner" ]; then
+        if [ "$RESTORE_MODE" != bundle ] && [ "$f" = errorNoDevice.jpg ] && [ -f "$BACKUP_DIR/errorNoDevice.owner" ]; then
             NODEV_OWNER="$(head -1 "$BACKUP_DIR/errorNoDevice.owner" 2>/dev/null)" || NODEV_OWNER=""
             if printf '%s\n' "$NODEV_OWNER" | grep -qE '^[0-9]{1,10}:[0-9]{1,10}$'; then
                 echo "[ ! -e $(eoswc_sq "$PLUGIN_DIR/Contents/Resources/$f") ] || chown $(eoswc_sq "$NODEV_OWNER") $(eoswc_sq "$PLUGIN_DIR/Contents/Resources/$f")"
@@ -300,12 +353,22 @@ RESTORE_SCRIPT="$STAGE/restore.sh"
             fi
         fi
         # Older installers left these world-writable (666); cp keeps that.
+        # (A mode isn't part of the signature.)
         echo "[ ! -e $(eoswc_sq "$PLUGIN_DIR/Contents/Resources/$f") ] || chmod 644 $(eoswc_sq "$PLUGIN_DIR/Contents/Resources/$f")"
     done
-    for f in MacOS/EOSWebcamUtility Resources/EOSWebcamService Resources/EWCProxy; do
-        echo "codesign --force --sign - $(eoswc_sq "$PLUGIN_DIR/Contents/$f")"
-    done
-    echo "codesign --force --deep --sign - $(eoswc_sq "$PLUGIN_DIR")"
+    if [ "$RESTORE_MODE" != bundle ]; then
+        # The helpers keep the signature they have in the backup (Canon's, or
+        # whatever an older uninstall gave them); only one that doesn't verify
+        # is re-signed, the way install.sh signs. The bundle's own signature
+        # files weren't backed up, so it is re-signed ad hoc: its seal has to
+        # cover Canon's binaries again.
+        Q_ENTS="$(eoswc_sq "$STAGE/entitlements.plist")"
+        for pair in EOSWebcamService:EWCService EWCProxy:EWCProxy; do
+            Q_H="$(eoswc_sq "$PLUGIN_DIR/Contents/Resources/${pair%%:*}")"
+            echo "codesign --verify --strict $Q_H >/dev/null 2>&1 || codesign --force --sign - --identifier ${pair#*:} --options runtime --entitlements $Q_ENTS $Q_H"
+        done
+        echo "codesign --force --sign - $(eoswc_sq "$PLUGIN_DIR")"
+    fi
 } > "$RESTORE_SCRIPT"
 chmod 700 "$RESTORE_SCRIPT"
 
@@ -321,7 +384,7 @@ launchctl unload "$LAUNCH_AGENT_SYS" 2>/dev/null || true
 sleep 1
 
 # Restore binaries
-echo "[2/4] Restoring original binaries (admin required)..."
+echo "[2/4] Restoring Canon's plug-in (macOS asks for your admin password)..."
 RESTORE_STARTED=1
 ROOT_OK=1
 osascript -e "do shell script \"bash '$RESTORE_SCRIPT'\" with administrator privileges" || ROOT_OK=0
@@ -336,10 +399,32 @@ if ! python3 "$PATCHER" --check-original "$PLUGIN_DIR/Contents"; then
     exit 1
 fi
 RESTORED=1
+SIGNATURE_NOTE=""
+if [ "$RESTORE_MODE" = bundle ]; then
+    if eoswc_canon_signed "$PLUGIN_DIR"; then
+        SIGNATURE_NOTE="Canon's signature is back (Team ID $EOSWC_CANON_TEAM); nothing was re-signed."
+    elif codesign --verify --deep --strict "$PLUGIN_DIR" >/dev/null 2>&1; then
+        SIGNATURE_NOTE="The plug-in is back exactly as it was before the install; nothing was re-signed."
+    else
+        echo "  WARNING: the restored plug-in doesn't pass codesign --verify --deep --strict:"
+        codesign --verify --deep --strict "$PLUGIN_DIR" 2>&1 | sed 's/^/    /' | head -12 || true
+        # Anything in the plug-in that isn't in the backup was left alone.
+        EXTRA="$(comm -13 <(cd "$STAGED_BUNDLE" && find . | LC_ALL=C sort)                          <(cd "$PLUGIN_DIR" && find . | LC_ALL=C sort) 2>/dev/null)" || EXTRA=""
+        if [ -n "$EXTRA" ]; then
+            echo "  These aren't part of the backed-up plug-in (something else put them there;"
+            echo "  they were left alone):"
+            printf '%s\n' "$EXTRA" | sed "s|^\\.|    $PLUGIN_DIR|" | head -20
+        fi
+        SIGNATURE_NOTE="The binaries are Canon's, but the plug-in's signature doesn't verify (see above)."
+    fi
+else
+    SIGNATURE_NOTE="The plug-in bundle is signed ad hoc (restored from an older backup, see above)."
+fi
 
 rm -rf "$STAGE"
 STAGE=""
 echo "  Original binaries restored"
+echo "  $SIGNATURE_NOTE"
 
 echo "[3/4] Restoring original config..."
 restore_config
@@ -356,6 +441,7 @@ echo ""
 echo "============================================"
 echo "  Uninstall complete."
 echo "  Original EOS Webcam Utility v1.3.16 restored."
+echo "  $SIGNATURE_NOTE"
 echo "  Backups kept (delete them yourself once you're happy):"
 echo "    $BACKUP_DIR"
 # This restores Canon's software; it doesn't remove it. That includes Canon's

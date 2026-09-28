@@ -101,6 +101,10 @@ test_reused_backup_gets_the_owner_recorded_too() {
     b="$(backup_root)/pre-v1.4.1-20260101-100000"
     mkdir -p "$b"
     cp "$BIN/EOSWebcamUtility" "$RES/EOSWebcamService" "$RES/EWCProxy" "$b/"
+    # Reused only while the installed plug-in isn't Canon's own signed bundle
+    # (then a full backup is taken instead): re-signed, as older uninstallers
+    # left it.
+    codesign --force --deep --sign - "$EOSWC_PLUGIN_DIR" 2>/dev/null
     run_install; assert_status "$RC" 0
     assert_contains "$OUT" "already backed up in $b"
     [ "$(cat "$b/errorNoDevice.owner" 2>/dev/null)" = "$(stat -f %u:%g "$ORIG/Contents/Resources/errorNoDevice.jpg")" ] ||

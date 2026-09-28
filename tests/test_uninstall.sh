@@ -259,6 +259,25 @@ test_failed_restore_is_reported_as_failure() {
     assert_contains "$STUB_LOG" "launchctl load $AGENT"
 }
 
+# VM scenario 6b, uninstall side: v1.4.1 is still installed from another
+# clone (X), with its backups in X/backups; uninstall runs from this clone.
+test_restores_from_the_clone_the_launchagent_runs_the_daemon_from() {
+    make_fork_install
+    local other="$HOME/Desktop/old-clone" good
+    good="$other/backups/pre-v1.4.1-20260920-100000"
+    mkdir -p "$good"
+    /usr/bin/python3 "$FIXTURES/make-canon-plugin.py" "$SANDBOX/canon"
+    cp "$SANDBOX/canon/Contents/MacOS/EOSWebcamUtility" "$SANDBOX/canon/Contents/Resources/EOSWebcamService" \
+       "$SANDBOX/canon/Contents/Resources/EWCProxy" "$good/"
+    echo old > "$other/eos-camera-manager.sh"
+    printf '<string>%s/eos-camera-manager.sh</string>\n' "$other" > "$AGENT"
+    run_uninstall; assert_status "$RC" 0
+    assert_contains "$OUT" "Restoring from backup: $good"
+    holds_originals "$EOSWC_PLUGIN_DIR/Contents" || fail "plug-in not restored"
+    assert_no_file "$other/eos-camera-manager.sh"
+    assert_file "$good/EWCProxy"   # never deleted
+}
+
 test_removes_old_in_clone_daemon() {
     make_fork_install
     make_backup legacy pre-v1.4.1-20260920-100000 originals >/dev/null

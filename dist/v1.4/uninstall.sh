@@ -17,6 +17,7 @@ USER_HOME="$HOME"
 # kept their backups here, under backups/.
 INSTALL_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 LAUNCH_AGENTS="$USER_HOME/Library/LaunchAgents"
+AGENT_PLIST="$LAUNCH_AGENTS/com.eos-camera-manager.plist"
 if [ ! -f "$SCRIPT_DIR/common.sh" ]; then
     echo "ERROR: common.sh not found next to this script."
     exit 1
@@ -49,6 +50,12 @@ echo ""
 # patched binaries (re-running an older installer over the fork) and cut-off
 # copies. This runs before anything is stopped or removed, so a bad backup
 # leaves the install exactly as it was.
+# Older installers ran the daemon out of the clone they were run from (maybe
+# not this one) and kept their backups there; the LaunchAgent says which.
+OLD_DAEMON="$(eoswc_agent_daemon_path "$AGENT_PLIST")"
+OLD_CLONE="$(eoswc_old_clone_dir "$AGENT_PLIST")"
+SEARCHED="$BACKUP_ROOT/ or $INSTALL_DIR/backups/"
+[ -n "$OLD_CLONE" ] && SEARCHED="$BACKUP_ROOT/, $INSTALL_DIR/backups/ or $OLD_CLONE/backups/"
 BACKUP_DIR=""
 SKIPPED=0
 while IFS= read -r d; do
@@ -59,14 +66,14 @@ while IFS= read -r d; do
     echo "Skipping backup without Canon's original binaries: $d"
     printf '%s\n' "$why" | sed -n 's/^    - /    /p'
     SKIPPED=$((SKIPPED + 1))
-done < <(eoswc_backup_candidates "$INSTALL_DIR")
+done < <(eoswc_backup_candidates "$INSTALL_DIR" "$OLD_CLONE")
 
 if [ -z "$BACKUP_DIR" ]; then
     if [ "$SKIPPED" -gt 0 ]; then
-        echo "ERROR: No backup in $BACKUP_ROOT/ or $INSTALL_DIR/backups/"
+        echo "ERROR: No backup in $SEARCHED"
         echo "       holds Canon's original binaries."
     else
-        echo "ERROR: No backup found in $BACKUP_ROOT/ or $INSTALL_DIR/backups/."
+        echo "ERROR: No backup found in $SEARCHED."
     fi
     echo "Nothing was changed. To get Canon's originals back, reinstall"
     echo "EOS Webcam Utility v1.3.16 from:"
@@ -102,7 +109,7 @@ on_exit() {
         fi
         echo "  Your backup is untouched: $BACKUP_DIR"
         launchctl load "$LAUNCH_AGENT_SYS" 2>/dev/null || true
-        launchctl load "$LAUNCH_AGENTS/com.eos-camera-manager.plist" 2>/dev/null || true
+        launchctl load "$AGENT_PLIST" 2>/dev/null || true
     fi
     return 0
 }
@@ -148,7 +155,7 @@ chmod 700 "$RESTORE_SCRIPT"
 
 # Stop services
 echo "[1/4] Stopping services..."
-launchctl unload "$LAUNCH_AGENTS/com.eos-camera-manager.plist" 2>/dev/null || true
+launchctl unload "$AGENT_PLIST" 2>/dev/null || true
 launchctl unload "$LAUNCH_AGENT_SYS" 2>/dev/null || true
 SERVICES_STOPPED=1
 sleep 1
@@ -185,8 +192,7 @@ done
 
 # Remove daemon
 echo "[4/4] Removing camera manager..."
-OLD_DAEMON="$(eoswc_agent_daemon_path "$LAUNCH_AGENTS/com.eos-camera-manager.plist")"
-rm -f "$LAUNCH_AGENTS/com.eos-camera-manager.plist"
+rm -f "$AGENT_PLIST"
 # The daemon, its images and generate-images.sh live in Application Support
 # (see install.sh: launchd can't read the clone if it sits in ~/Downloads and
 # friends), next to Canon's config. Remove only what the installer put there,

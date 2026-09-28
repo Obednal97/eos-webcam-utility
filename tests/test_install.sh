@@ -252,8 +252,15 @@ test_rerun_over_fork_uses_existing_backup() {
     run_install; assert_status "$RC" 0
     assert_contains "$OUT" "Mode:          Update existing fork"
     assert_contains "$OUT" "already patched: no Canon originals to back up"
-    assert_contains "$OUT" "Backups:        $legacy"
-    assert_no_file "$(backup_root)"   # no useless backup of patched binaries
+    # The legacy backup is copied (verified) to Application Support and left
+    # where it was; that copy is the only backup made: none of the patched
+    # binaries.
+    local copy
+    copy="$(backup_root)/pre-v1.4.0-20260101-100000"
+    assert_contains "$OUT" "Backups:        $copy"
+    holds_originals "$copy" || fail "the copy does not verify"
+    [ "$(count_backups)" = 1 ] || fail "expected only the copy, have $(count_backups)"
+    assert_same "$copy/EWCProxy" "$legacy/EWCProxy"
     assert_log_matches "--check-patched '$EOSWC_PLUGIN_DIR/Contents'"
     holds_patched "$EOSWC_PLUGIN_DIR/Contents" || fail "plug-in not patched"
 }
@@ -264,6 +271,75 @@ test_rerun_over_fork_without_backup_warns() {
     assert_contains "$OUT" "WARNING: no backup of Canon's original binaries was found"
     assert_contains "$OUT" "Backups:        none"
     assert_no_file "$(backup_root)"
+}
+
+# VM scenario 6b. v1.4.1 was installed from another clone (X): its daemon
+# ran from X, its LaunchAgent says so, and its backups are in X/backups.
+# This install runs from a different clone.
+make_v141_install_in_other_clone() {
+    make_canon_install --patched
+    OLDCLONE="$HOME/Desktop/old-clone"
+    mkdir -p "$OLDCLONE/dist/v1.4" "$OLDCLONE/backups"
+    echo old > "$OLDCLONE/eos-camera-manager.sh"
+    echo old > "$OLDCLONE/generate-images.sh"
+    cat > "$AGENT" <<PLIST
+<plist version="1.0"><dict>
+	<key>Label</key><string>com.eos-camera-manager</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/bash</string>
+		<string>$OLDCLONE/eos-camera-manager.sh</string>
+	</array>
+</dict></plist>
+PLIST
+    /usr/bin/python3 "$FIXTURES/make-canon-plugin.py" "$SANDBOX/canon"
+    local b
+    for b in pre-v1.4.1-20260901-100000 pre-v1.4.1-20260910-100000; do
+        mkdir -p "$OLDCLONE/backups/$b"
+        cp "$SANDBOX/canon/Contents/MacOS/EOSWebcamUtility" "$SANDBOX/canon/Contents/Resources/EOSWebcamService" \
+           "$SANDBOX/canon/Contents/Resources/EWCProxy" "$SANDBOX/canon/Contents/Resources/errorNoDevice.jpg" \
+           "$OLDCLONE/backups/$b/"
+    done
+    echo '<canon config/>' > "$OLDCLONE/backups/pre-v1.4.1-20260910-100000/config.plist"
+    touch -t 202609010000 "$OLDCLONE/backups/pre-v1.4.1-20260901-100000"
+    touch -t 202609100000 "$OLDCLONE/backups/pre-v1.4.1-20260910-100000"
+    (cd "$OLDCLONE/backups" && find . -type f -exec shasum {} + | sort) > "$SANDBOX/oldclone-backups.sum"
+}
+
+test_upgrade_from_another_clone_finds_and_keeps_its_backups() {
+    make_v141_install_in_other_clone
+    local newest="$OLDCLONE/backups/pre-v1.4.1-20260910-100000" copy
+    run_install; assert_status "$RC" 0
+    assert_contains "$OUT" "Mode:          Update existing fork"
+    assert_lacks "$OUT" "WARNING: no backup of Canon's original binaries was found"
+    assert_contains "$OUT" "Found a backup of Canon's originals left by an older installer: $newest"
+    # A verified copy now lives in Application Support, so it outlives X.
+    copy="$(latest_backup)"
+    [ -n "$copy" ] || { fail "no copy of the old clone's backup in $(backup_root)"; return 0; }
+    holds_originals "$copy" || fail "the copy in $copy does not verify"
+    local f
+    for f in EOSWebcamUtility EOSWebcamService EWCProxy errorNoDevice.jpg config.plist; do
+        assert_same "$copy/$f" "$newest/$f"
+    done
+    assert_contains "$OUT" "Backups:        $copy"
+    # The old clone's backups are never moved, changed or deleted.
+    (cd "$OLDCLONE/backups" && find . -type f -exec shasum {} + | sort) > "$SANDBOX/oldclone-after.sum"
+    assert_same "$SANDBOX/oldclone-after.sum" "$SANDBOX/oldclone-backups.sum"
+    # The old daemon copy in X went, as before.
+    assert_no_file "$OLDCLONE/eos-camera-manager.sh"
+    assert_daemon_in_runtime_dir
+    # And uninstall, from this clone, restores from the copy even with X gone.
+    mv "$OLDCLONE" "$SANDBOX/old-clone-moved-away"
+    run_uninstall; assert_status "$RC" 0
+    assert_contains "$OUT" "Restoring from backup: $copy"
+    holds_originals "$EOSWC_PLUGIN_DIR/Contents" || fail "plug-in not restored"
+}
+
+test_upgrade_from_another_clone_copies_its_backup_only_once() {
+    make_v141_install_in_other_clone
+    run_install; assert_status "$RC" 0
+    run_install; assert_status "$RC" 0
+    [ "$(count_backups)" = 1 ] || fail "expected one copy in Application Support, have $(count_backups)"
 }
 
 test_refuses_an_install_missing_a_binary() {

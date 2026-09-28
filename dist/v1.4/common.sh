@@ -32,15 +32,83 @@ EOSWC_BACKUP_ROOT="$EOSWC_RUNTIME_DIR/backups"
 # really was, and kept its backups under it.
 EOSWC_V14_CLONE="$HOME/development/webcam-utility"
 
-# Backup dirs, newest first, from every location: Application Support, the
-# clone ($1, repo root), and the first v1.4 installer's fixed path.
+# Backup dirs, newest first, from every location: Application Support, each
+# clone given (repo roots: the one this script runs from, and the one an
+# older install ran its daemon from, see eoswc_old_clone_dir), and the first
+# v1.4 installer's fixed path. A clone given twice is searched once.
 eoswc_backup_candidates() {
-    local clone="$1"
-    if [ -d "$EOSWC_V14_CLONE/backups" ] && ! [ "$clone" -ef "$EOSWC_V14_CLONE" ]; then
-        ls -dt "$EOSWC_BACKUP_ROOT"/pre-v* "$clone"/backups/pre-v* "$EOSWC_V14_CLONE"/backups/pre-v* 2>/dev/null || true
-    else
-        ls -dt "$EOSWC_BACKUP_ROOT"/pre-v* "$clone"/backups/pre-v* 2>/dev/null || true
+    local c d seen clones=() globs=("$EOSWC_BACKUP_ROOT"/pre-v*)
+    for c in "$@" "$EOSWC_V14_CLONE"; do
+        [ -n "$c" ] && [ -d "$c/backups" ] || continue
+        seen=0
+        for d in "${clones[@]+"${clones[@]}"}"; do
+            [ "$c" -ef "$d" ] && seen=1
+        done
+        [ "$seen" = 1 ] && continue
+        clones+=("$c")
+        globs+=("$c"/backups/pre-v*)
+    done
+    ls -dt "${globs[@]}" 2>/dev/null || true
+}
+
+# The clone an older install (v1.4.1 and before) ran from, going by the
+# camera-manager LaunchAgent plist $1: those installers put the daemon at
+# <clone>/eos-camera-manager.sh and their backups in <clone>/backups/. Prints
+# nothing if the agent runs the daemon from the runtime dir (this layout) or
+# the dir is gone. The clone may differ from the one running this script: an
+# upgrade from a fresh clone is the usual case.
+eoswc_old_clone_dir() {
+    local daemon dir
+    daemon="$(eoswc_agent_daemon_path "$1")"
+    case "$daemon" in /?*/eos-camera-manager.sh) ;; *) return 0 ;; esac
+    dir="${daemon%/eos-camera-manager.sh}"
+    [ -d "$dir" ] || return 0
+    [ "$dir" -ef "$EOSWC_RUNTIME_DIR" ] && return 0
+    printf '%s\n' "$dir"
+}
+
+# Files a backup dir can hold; the first three are the ones that matter.
+EOSWC_BACKUP_FILES="EOSWebcamUtility EOSWebcamService EWCProxy EWCPairingService errorNoDevice.jpg errorBusy.jpg default.jpg config.plist proconfig.plist"
+
+# Copy backup dir $1 (outside Application Support, e.g. an old clone's
+# backups/) into EOSWC_BACKUP_ROOT under the same name, so it outlives that
+# clone. $2 is patch-binaries.py. The copy is written under a temporary name,
+# checked (every file byte-identical to the source, and --check-original),
+# and only then given its pre-v* name, so a half-written copy is never taken
+# for a backup. The source is only read, never changed or removed. Prints the
+# copy's path. If an identical copy is already there, prints that instead.
+eoswc_adopt_backup() {
+    local src="$1" patcher="$2" name dest tmp f ok=1
+    name="$(basename "$src")"
+    case "$name" in pre-v*) ;; *) return 1 ;; esac
+    dest="$EOSWC_BACKUP_ROOT/$name"
+    if [ -e "$dest" ]; then
+        for f in $EOSWC_BACKUP_FILES; do
+            if [ -f "$src/$f" ]; then cmp -s "$src/$f" "$dest/$f" || ok=0; fi
+        done
+        if [ "$ok" = 1 ] && python3 "$patcher" --check-original "$dest" >/dev/null 2>&1; then
+            printf '%s\n' "$dest"
+            return 0
+        fi
+        dest="$EOSWC_BACKUP_ROOT/$name-copy-$(date +%Y%m%d-%H%M%S)"
+        [ ! -e "$dest" ] || return 1
     fi
+    mkdir -p "$EOSWC_BACKUP_ROOT" || return 1
+    tmp="$(mktemp -d "$EOSWC_BACKUP_ROOT/.copying.XXXXXX")" || return 1
+    for f in $EOSWC_BACKUP_FILES; do
+        if [ -f "$src/$f" ]; then
+            cp -p "$src/$f" "$tmp/$f" && cmp -s "$src/$f" "$tmp/$f" || ok=0
+        fi
+    done
+    if [ "$ok" = 1 ] && python3 "$patcher" --check-original "$tmp" >/dev/null 2>&1 &&
+       mv "$tmp" "$dest"; then
+        printf '%s\n' "$dest"
+        return 0
+    fi
+    # Only what this function wrote, in the dir it just made.
+    for f in $EOSWC_BACKUP_FILES; do rm -f "$tmp/$f"; done
+    rmdir "$tmp" 2>/dev/null
+    return 1
 }
 
 # $1 quoted for a shell command line, e.g. the scripts root runs: 'it'\''s'.

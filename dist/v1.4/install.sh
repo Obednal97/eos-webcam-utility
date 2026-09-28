@@ -256,13 +256,19 @@ echo "[4/8] Creating backups..."
 SNAPSHOT=new
 [ "$INSTALL_TYPE" = upgrade_fork ] && SNAPSHOT=none
 EXISTING_BACKUP=""
+# Older installers ran the daemon out of the clone they were run from, which
+# may not be this one, and kept their backups there. The LaunchAgent says
+# which clone that was; read it now, before the backup search (the agent is
+# rewritten below), so an upgrade from a fresh clone still finds them.
+OLD_DAEMON="$(eoswc_agent_daemon_path "$LAUNCH_AGENTS/com.eos-camera-manager.plist")"
+OLD_CLONE="$(eoswc_old_clone_dir "$LAUNCH_AGENTS/com.eos-camera-manager.plist")"
 # The newest backup that verifies as Canon's originals, in any location.
 while IFS= read -r d; do
     if python3 "$PATCHER" --check-original "$d" >/dev/null 2>&1; then
         EXISTING_BACKUP="$d"
         break
     fi
-done < <(eoswc_backup_candidates "$INSTALL_DIR")
+done < <(eoswc_backup_candidates "$INSTALL_DIR" "$OLD_CLONE")
 if [ "$SNAPSHOT" = new ] && [ "$INSTALL_TYPE" = upgrade_original ] && [ -n "$EXISTING_BACKUP" ]; then
     # Reusable only from Application Support: root can't read an older
     # backup left in a privacy-protected clone, and must re-check it.
@@ -287,6 +293,21 @@ elif [ "$SNAPSHOT" = reuse ]; then
     echo "  (it holds exactly the installed files; no new copy needed)."
 else
     echo "  The installed binaries are already patched: no Canon originals to back up."
+    case "$EXISTING_BACKUP" in
+    ""|"$BACKUP_ROOT"/*) ;;
+    *)
+        # It is the only copy of Canon's originals, and it sits in a clone that
+        # may be moved or deleted. Keep a verified copy in Application Support
+        # (the original is left exactly where it is).
+        echo "  Found a backup of Canon's originals left by an older installer: $EXISTING_BACKUP"
+        if ADOPTED="$(eoswc_adopt_backup "$EXISTING_BACKUP" "$PATCHER")"; then
+            echo "  Copied it (verified) to $ADOPTED, so it no longer depends on that clone."
+            EXISTING_BACKUP="$ADOPTED"
+        else
+            echo "  WARNING: could not copy it to $BACKUP_ROOT/. It is still used from"
+            echo "           where it is: don't delete that clone before uninstalling."
+        fi ;;
+    esac
     if [ -n "$EXISTING_BACKUP" ]; then
         echo "  Existing backup of Canon's originals: $EXISTING_BACKUP"
     else
@@ -298,9 +319,8 @@ fi
 
 # --- Stop services ---
 echo "[5/8] Stopping existing services..."
-# Older installers ran the daemon out of the clone; note where, so that copy
-# can be cleaned up once the new one is in place.
-OLD_DAEMON="$(eoswc_agent_daemon_path "$LAUNCH_AGENTS/com.eos-camera-manager.plist")"
+# OLD_DAEMON (read above) is where an older installer ran the daemon from;
+# that copy is cleaned up once the new one is in place.
 launchctl unload "$LAUNCH_AGENTS/com.eos-camera-manager.plist" 2>/dev/null || true
 launchctl unload "$LAUNCH_AGENT_SYS" 2>/dev/null || true
 pkill -9 EOSWebcamServic 2>/dev/null || true

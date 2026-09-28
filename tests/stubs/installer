@@ -18,4 +18,6 @@ case "${EOSWC_PLUGIN_DIR:?}" in
     "${EOSWC_TEST_SANDBOX:?}"/*) ;;
     *) echo "installer stub: plug-in dir outside sandbox" >&2; exit 2 ;;
 esac
-/usr/bin/python3 "${FIXTURES:?}/make-canon-plugin.py" "$EOSWC_PLUGIN_DIR"
+# STUB_INSTALLER_ARGS: extra fixture flags, e.g. --truncated for a bad payload.
+# shellcheck disable=SC2086
+/usr/bin/python3 "${FIXTURES:?}/make-canon-plugin.py" "$EOSWC_PLUGIN_DIR" ${STUB_INSTALLER_ARGS:-}

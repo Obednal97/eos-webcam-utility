@@ -36,23 +36,31 @@ if printf '%s\n' "$root_text" | grep -qF '/Library/CoreMediaIO/'; then
     echo "osascript stub: root script names the real plug-in; refusing" >&2
     exit 99
 fi
-protected="${TCC_PROTECTED:-}"
-if [ -n "$protected" ]; then
-    # Only ever chmod inside the test sandbox.
-    case "$protected" in
+# Only ever chmod inside the test sandbox.
+in_sandbox() {
+    case "$1" in
         "${EOSWC_TEST_SANDBOX:?}"/*) ;;
-        *) echo "osascript stub: TCC_PROTECTED outside sandbox: $protected" >&2; exit 2 ;;
+        *) echo "osascript stub: $2 outside sandbox: $1" >&2; exit 2 ;;
     esac
-    trap 'chmod 755 "$protected"' EXIT
-    chmod 000 "$protected"
-fi
+}
+protected="${TCC_PROTECTED:-}"
+readonly_dir="${STUB_ROOT_READONLY:-}"
+[ -z "$protected" ] || in_sandbox "$protected" TCC_PROTECTED
+[ -z "$readonly_dir" ] || in_sandbox "$readonly_dir" STUB_ROOT_READONLY
+restore_perms() {
+    [ -z "$protected" ] || chmod 755 "$protected"
+    [ -z "$readonly_dir" ] || [ ! -d "$readonly_dir" ] || find "$readonly_dir" -type d -exec chmod 755 {} +
+}
+trap restore_perms EXIT
+# TCC: the elevated shell cannot read the protected folder.
+[ -z "$protected" ] || chmod 000 "$protected"
+# STUB_ROOT_READONLY: a dir tree root cannot write to (simulates a failing
+# write, e.g. a full or read-only disk).
+[ -z "$readonly_dir" ] || [ ! -d "$readonly_dir" ] || find "$readonly_dir" -type d -exec chmod 555 {} +
 {
     echo "--- root script ---"
     echo "$body"
-    # install.sh passes `bash '<script>'`: log what that script will run too.
-    case "$body" in
-        "bash '"*"'") f="${body#bash \'}"; f="${f%\'}"; [ -f "$f" ] && cat "$f" ;;
-    esac
+    [ -n "$file" ] && [ -f "$file" ] && cat "$file"
     echo "--- end root script ---"
 } >> "$STUB_LOG"
 bash -c "$body"

@@ -2,15 +2,19 @@
 #
 # EOS Webcam Utility Fork v1.4 — Uninstaller
 #
-# Restores the original EOS Webcam Utility v1.3.16 files
-# and removes the camera manager daemon.
+# Restores the original EOS Webcam Utility v1.3.16 files from the newest
+# backup that verifies as Canon's originals (in ~/Library/Application Support/
+# EWCService/backups/, or backups/ in the clone for older installs), then
+# removes the camera manager daemon. Backups are kept.
 #
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PATCHER="$SCRIPT_DIR/patch-binaries.py"
 USER_HOME="$HOME"
-# Match install.sh: the clone this script was run from (repo root).
+# The clone this script was run from (repo root). Earlier installers
+# kept their backups here, under backups/.
 INSTALL_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 LAUNCH_AGENTS="$USER_HOME/Library/LaunchAgents"
 if [ ! -f "$SCRIPT_DIR/common.sh" ]; then
@@ -24,46 +28,45 @@ eoswc_select_plugin_dir || exit 1
 PLUGIN_DIR="$EOSWC_PLUGIN"
 # Canon's config dir, which is also where install.sh puts the daemon.
 SUPPORT_DIR="$EOSWC_RUNTIME_DIR"
+BACKUP_ROOT="$EOSWC_BACKUP_ROOT"
 LAUNCH_AGENT_SYS="/Library/LaunchAgents/com.canon.usa.EWCService.plist"
-
-# A backup is restorable if it holds all three binaries and they are Canon's
-# originals. Two things produce backups that aren't: an install that hit the
-# privacy-protected-folder bug (empty backup), and re-running the installer
-# over the fork (it snapshots the already-patched binaries). The check reads
-# the same EOSWebcamService offset install.sh uses to detect a fork install;
-# the original bytes there are 00c14339, the fork's are 20008052.
-backup_restorable() {
-    local d="$1" f marker
-    for f in EOSWebcamUtility EOSWebcamService EWCProxy; do
-        [ -s "$d/$f" ] || return 1
-    done
-    marker=$(od -An -tx1 -j $((0x89b58)) -N4 "$d/EOSWebcamService" 2>/dev/null | tr -d ' \n')
-    [ "$marker" = "00c14339" ]
-}
+if ! command -v python3 >/dev/null 2>&1 || [ ! -f "$PATCHER" ]; then
+    echo "ERROR: python3 and patch-binaries.py (next to this script) are needed to"
+    echo "       check the backup. Nothing was changed."
+    exit 1
+fi
 
 echo "============================================"
 echo "  EOS Webcam Utility Fork — Uninstaller"
 echo "============================================"
 echo ""
 
-# Pick the most recent restorable backup. This runs before anything is
-# stopped or removed, so a bad backup leaves the install exactly as it was.
+# Pick the most recent backup that really holds Canon's originals:
+# patch-binaries.py --check-original matches each of the three binaries
+# against Canon's v1.3.16 package by SHA-256 or, failing that, checks every
+# patch offset and that the file isn't truncated. That rules out empty or partial backups
+# (the privacy-protected-folder bug), backups of already-patched or partly
+# patched binaries (re-running an older installer over the fork) and cut-off
+# copies. This runs before anything is stopped or removed, so a bad backup
+# leaves the install exactly as it was.
 BACKUP_DIR=""
 SKIPPED=0
 while IFS= read -r d; do
-    if backup_restorable "$d"; then
+    if why="$(python3 "$PATCHER" --check-original "$d" 2>&1)"; then
         BACKUP_DIR="$d"
         break
     fi
     echo "Skipping backup without Canon's original binaries: $d"
+    printf '%s\n' "$why" | sed -n 's/^    - /    /p'
     SKIPPED=$((SKIPPED + 1))
-done < <(ls -dt "$INSTALL_DIR/backups/pre-v"* 2>/dev/null)
+done < <(eoswc_backup_candidates "$INSTALL_DIR")
 
 if [ -z "$BACKUP_DIR" ]; then
     if [ "$SKIPPED" -gt 0 ]; then
-        echo "ERROR: No backup in $INSTALL_DIR/backups/ holds Canon's original binaries."
+        echo "ERROR: No backup in $BACKUP_ROOT/ or $INSTALL_DIR/backups/"
+        echo "       holds Canon's original binaries."
     else
-        echo "ERROR: No backup found in $INSTALL_DIR/backups/."
+        echo "ERROR: No backup found in $BACKUP_ROOT/ or $INSTALL_DIR/backups/."
     fi
     echo "Nothing was changed. To get Canon's originals back, reinstall"
     echo "EOS Webcam Utility v1.3.16 from:"
@@ -92,6 +95,27 @@ on_exit() {
 }
 trap on_exit EXIT
 
+# The elevated shell osascript spawns has no TCC access to user folders
+# (~/Downloads, ~/Desktop, ~/Documents, iCloud Drive...), so it cannot read a
+# backup that an older installer left in a clone there — "Operation not
+# permitted", even as root. Stage the files through the temp dir, which is
+# outside TCC's reach, and verify the staged copies: they are what root copies.
+# This happens before anything is stopped.
+STAGE="$(mktemp -d -t eoswc-restore)"
+for f in EOSWebcamUtility EOSWebcamService EWCProxy; do
+    if ! cp "$BACKUP_DIR/$f" "$STAGE/$f"; then
+        echo "ERROR: could not read $f from the backup — nothing was changed."
+        exit 1
+    fi
+done
+if ! python3 "$PATCHER" --check-original "$STAGE"; then
+    echo "ERROR: the staged copy of the backup failed verification — nothing was changed."
+    exit 1
+fi
+for f in errorNoDevice.jpg errorBusy.jpg default.jpg; do
+    cp "$BACKUP_DIR/$f" "$STAGE/$f" 2>/dev/null || true
+done
+
 # Stop services
 echo "[1/4] Stopping services..."
 launchctl unload "$LAUNCH_AGENTS/com.eos-camera-manager.plist" 2>/dev/null || true
@@ -101,20 +125,6 @@ sleep 1
 
 # Restore binaries
 echo "[2/4] Restoring original binaries (admin required)..."
-# The elevated shell osascript spawns has no TCC access to user folders
-# (~/Downloads, ~/Desktop, ~/Documents, iCloud Drive...), so it cannot read the
-# backup where it sits — "Operation not permitted", even as root. Stage the
-# files through the temp dir, which is outside TCC's reach.
-STAGE="$(mktemp -d -t eoswc-restore)"
-for f in EOSWebcamUtility EOSWebcamService EWCProxy errorNoDevice.jpg errorBusy.jpg default.jpg; do
-    cp "$BACKUP_DIR/$f" "$STAGE/$f" 2>/dev/null || true
-done
-for f in EOSWebcamUtility EOSWebcamService EWCProxy; do
-    if [ ! -s "$STAGE/$f" ]; then
-        echo "ERROR: backup is missing $f — cannot restore."
-        exit 1
-    fi
-done
 osascript -e "do shell script \"
 cp '$STAGE/EOSWebcamUtility' '$PLUGIN_DIR/Contents/MacOS/EOSWebcamUtility'
 cp '$STAGE/EOSWebcamService' '$PLUGIN_DIR/Contents/Resources/EOSWebcamService'
@@ -159,6 +169,8 @@ for f in $EOSWC_RUNTIME_FILES $EOSWC_LOGO_FILES; do
         echo "  Removed $SUPPORT_DIR/$f"
     fi
 done
+# Never the whole dir: it is Canon's, and it holds the backups (backups/),
+# which are kept so a restore can be repeated. rmdir only succeeds if empty.
 rmdir "$SUPPORT_DIR" 2>/dev/null || true
 # Installs from before that ran the daemon out of the clone.
 if [ -n "$OLD_DAEMON" ]; then
@@ -173,5 +185,6 @@ echo ""
 echo "============================================"
 echo "  Uninstall complete."
 echo "  Original EOS Webcam Utility v1.3.16 restored."
-echo "  Backups preserved at: $INSTALL_DIR/backups/"
+echo "  Backups kept (delete them yourself once you're happy):"
+echo "    $BACKUP_DIR"
 echo "============================================"

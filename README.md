@@ -126,8 +126,9 @@ non-interactively.
 > background daemon from reading those folders. Older versions of the installer
 > could fail at step 6 with "Operation not permitted", leave an empty backup
 > or leave the daemon crash-looping. The installer now passes everything the
-> admin step needs through a temporary folder and installs the daemon to
-> `~/Library/Application Support/EWCService/`, so the clone can live anywhere.
+> admin step needs through a temporary folder and installs the daemon and the
+> backups to `~/Library/Application Support/EWCService/`, so the clone can live
+> anywhere.
 > Older installs that ran the daemon from the clone are moved over when you
 > re-run the installer.
 
@@ -135,10 +136,10 @@ non-interactively.
 
 1. Detects whether EOS Webcam Utility is already installed (fresh / original / previous fork)
 2. Obtains Canon's original binaries (installed / downloaded-and-checksummed / your `--pkg`)
-3. Runs Canon's own installer if the base software isn't present, then snapshots the originals for uninstall
+3. Runs Canon's own installer if the base software isn't present, then backs up Canon's original binaries for uninstall and verifies the backup (see [Backups](#backups)). If the backup can't be written or doesn't verify, it stops before patching anything
 4. Applies the fork's byte patches with `patch-binaries.py` (self-verifying: aborts on any non-v1.3.16 build) and re-signs
 5. Sets configuration to 1920x1080 @ 30fps
-6. Installs the camera manager daemon (auto-starts on login), its custom loading screens and `generate-images.sh` into `~/Library/Application Support/EWCService/`. Backups stay in the clone under `backups/`
+6. Installs the camera manager daemon (auto-starts on login), its custom loading screens and `generate-images.sh` into `~/Library/Application Support/EWCService/`
 7. Starts all services
 
 The patch step never changes anything unless the exact original bytes are
@@ -150,13 +151,51 @@ present, and it's idempotent, so re-running it is safe.
 bash dist/v1.4/uninstall.sh
 ```
 
-Restores Canon's original files from the most recent backup that holds them
-(it skips empty backups and backups of already-patched binaries). If there is
-no usable backup it stops before changing anything. It then removes the camera
-manager's LaunchAgent and everything the installer put in
-`~/Library/Application Support/EWCService/`, including a `logo.png` you added
-there, but leaves Canon's own config files. Run it from the same clone you
-installed from, since that's where the backups are.
+Restores Canon's original files from the most recent backup that verifies as
+Canon's originals (see [Backups](#backups)). If there is no usable backup it
+stops before changing anything. If the restore fails part-way, it says so,
+exits with an error and leaves the fork's daemon in place. After a verified
+restore it:
+
+- puts back the `config.plist` / `proconfig.plist` from that backup, or deletes
+  them if the backup has none (the installer created them, and Canon writes
+  fresh defaults)
+- removes the camera manager's LaunchAgent and everything the installer put in
+  `~/Library/Application Support/EWCService/`, including a `logo.png` you added
+  there. Anything else Canon keeps in that folder is left alone
+- keeps the backups
+
+### Backups
+
+Before patching, the installer copies Canon's original `EOSWebcamUtility`,
+`EOSWebcamService` and `EWCProxy` (plus Canon's images and config files) to
+`~/Library/Application Support/EWCService/backups/pre-v<version>-<date>/`.
+It then checks the copy with `patch-binaries.py --check-original`: each file
+must match the SHA-256 of the one in Canon's v1.3.16 package or, if it isn't
+byte-identical (for example re-signed), hold Canon's original bytes at every
+patch offset and not be truncated. Only then does it patch. If a backup in
+that folder already holds exactly the installed files, it's reused instead of
+copied again. If the installed binaries are neither Canon's originals nor the
+fork's (another build, half-patched, truncated), the installer stops before
+changing anything.
+
+That folder is used because the admin step can write there (macOS privacy
+protection doesn't cover it), macOS doesn't clear it the way it clears temp
+folders, and it doesn't depend on where the clone is, so you can move or delete
+the clone and still uninstall from a fresh one. Earlier installers kept
+backups in the clone under `backups/`. `uninstall.sh` still finds those if you
+run it from that clone, and checks them the same way.
+
+Re-running the installer over the fork takes no new backup, since the
+binaries are already patched. It reports the backup it found, or warns if
+there is none.
+
+Uninstall keeps the backups. Once you're happy with the restore, you can
+delete them yourself:
+
+```bash
+rm -r ~/Library/Application\ Support/EWCService/backups
+```
 
 If something isn't working, `bash dist/v1.4/diagnose.sh` writes a report to
 your Desktop. It shows where the daemon is installed and whether it is actually

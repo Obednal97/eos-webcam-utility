@@ -20,33 +20,32 @@ EOSWC_RUNTIME_FILES="eos-camera-manager.sh generate-images.sh errorNoDevice_conn
 # generate-images.sh looks for either of these next to itself.
 EOSWC_LOGO_FILES="logo.png logo.svg"
 
-# True if launchd has a live process for the job. A label shows up in
-# `launchctl list` even while its job is failing to start (PID column "-"),
-# so mere presence is not enough. Columns: PID, last exit status, label.
-eoswc_job_running() {
-    launchctl list 2>/dev/null | awk -v label="$1" '
-        $3 == label && $1 != "-" { found = 1 }
-        END { exit !found }'
+# Snapshots of Canon's original binaries (and config), one pre-v<version>-<time>
+# dir per install. They live in Application Support, not in the clone and not
+# in a temp dir: the admin step can write here (TCC does not cover it, see
+# above), macOS never purges it the way it purges $TMPDIR, and it survives the
+# clone being moved or deleted. Earlier installers kept them in the clone
+# under backups/; uninstall.sh still looks there too.
+EOSWC_BACKUP_ROOT="$EOSWC_RUNTIME_DIR/backups"
+
+# The very first v1.4 installer assumed the clone was here, wherever it
+# really was, and kept its backups under it.
+EOSWC_V14_CLONE="$HOME/development/webcam-utility"
+
+# Backup dirs, newest first, from every location: Application Support, the
+# clone ($1, repo root), and the first v1.4 installer's fixed path.
+eoswc_backup_candidates() {
+    local clone="$1"
+    if [ -d "$EOSWC_V14_CLONE/backups" ] && ! [ "$clone" -ef "$EOSWC_V14_CLONE" ]; then
+        ls -dt "$EOSWC_BACKUP_ROOT"/pre-v* "$clone"/backups/pre-v* "$EOSWC_V14_CLONE"/backups/pre-v* 2>/dev/null || true
+    else
+        ls -dt "$EOSWC_BACKUP_ROOT"/pre-v* "$clone"/backups/pre-v* 2>/dev/null || true
+    fi
 }
 
-# Print the daemon path a camera-manager LaunchAgent plist runs, if any.
-eoswc_agent_daemon_path() {
-    [ -f "$1" ] || return 0
-    sed -n 's:.*<string>\(.*eos-camera-manager\.sh\)</string>.*:\1:p' "$1" | head -1
-}
-
-# Remove the daemon copy (and its images) that older installers put in the
-# clone. Only the known file names are removed, never the dir itself, and
-# never the current runtime dir. A logo.png/logo.svg is left in place.
-eoswc_remove_legacy_runtime() {
-    local dir="$1" f
-    [ -n "$dir" ] && [ -d "$dir" ] || return 0
-    [ "$dir" -ef "$EOSWC_RUNTIME_DIR" ] && return 0
-    for f in $EOSWC_RUNTIME_FILES; do
-        if [ -f "$dir/$f" ]; then
-            rm -f "$dir/$f" && echo "  Removed old $dir/$f"
-        fi
-    done
+# $1 quoted for a shell command line, e.g. the scripts root runs: 'it'\''s'.
+eoswc_sq() {
+    printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
 }
 
 EOSWC_REAL_PLUGIN_DIR="/Library/CoreMediaIO/Plug-Ins/DAL/EOSWebcamUtility.plugin"

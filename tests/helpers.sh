@@ -118,7 +118,7 @@ enter_sandbox() {
     export TCC_PROTECTED="$HOME/Downloads"
     export FIXTURES
     export PATH="$STUBS_DIR:/usr/bin:/bin:/usr/sbin:/sbin"
-    unset STUB_OSASCRIPT_CANCEL
+    unset STUB_OSASCRIPT_CANCEL STUB_ROOT_READONLY STUB_INSTALLER_ARGS
 
     mkdir -p "$HOME/Downloads" "$HOME/Desktop" "$HOME/Library/LaunchAgents" \
              "$HOME/Library/Logs" "$TMPDIR"
@@ -198,9 +198,16 @@ launchctl_lists() {
     printf '%s\n' "$@" | tr '|' '\t' > "$STUB_LAUNCHCTL_LIST"
 }
 
+# Where install.sh puts backups now, and where older installers put them.
+backup_root()        { echo "$RUNTIME/backups"; }
+legacy_backup_root() { echo "$CLONE/backups"; }
 latest_backup() {
-    ls -dt "$CLONE/backups/pre-v"* 2>/dev/null | head -1 || true
+    ls -dt "$(backup_root)/pre-v"* 2>/dev/null | head -1 || true
 }
+
+# patch-binaries.py --check-original / --check-patched on a dir.
+holds_originals() { /usr/bin/python3 -B "$CLONE/dist/v1.4/patch-binaries.py" --check-original "$1" >/dev/null 2>&1; }
+holds_patched()   { /usr/bin/python3 -B "$CLONE/dist/v1.4/patch-binaries.py" --check-patched "$1" >/dev/null 2>&1; }
 
 staging_dirs() {
     find "$STAGE_ROOT" "$TMPDIR" -mindepth 1 -maxdepth 1 \

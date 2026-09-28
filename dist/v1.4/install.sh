@@ -44,8 +44,10 @@ USER_HOME="$HOME"
 USERNAME="$(whoami)"
 SUPPORT_DIR="$USER_HOME/Library/Application Support/EWCService"
 LAUNCH_AGENTS="$USER_HOME/Library/LaunchAgents"
-# Backups go next to the clone this script was run from.
+# The clone this script was run from. Older installers kept backups (and the
+# daemon) here; see EOSWC_BACKUP_ROOT in common.sh for where backups go now.
 INSTALL_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+BACKUP_ROOT="$EOSWC_BACKUP_ROOT"
 # The daemon and its images must live somewhere launchd can actually read them.
 # A LaunchAgent gets no TCC access to ~/Downloads, ~/Desktop, ~/Documents or
 # iCloud Drive, so running the daemon out of the clone fails with "Operation not
@@ -82,19 +84,11 @@ INSTALL_COMPLETE=0
 WORK=""
 STAGE=""
 BACKUP_DIR=""
-# Copy root's snapshots of Canon's originals out of staging into the backup
-# dir. Also run on failure, so a patch step that dies part-way still leaves
-# uninstall something to restore from.
-save_snapshots() {
-    local f
-    [ -n "$STAGE" ] && [ -d "$STAGE/orig" ] && [ -n "$BACKUP_DIR" ] || return 0
-    for f in "$STAGE/orig/"*; do
-        [ -e "$f" ] && cp "$f" "$BACKUP_DIR/" 2>/dev/null || true
-    done
-}
+# Staging only ever holds copies of things that exist elsewhere (the patcher,
+# the Canon .pkg, the root script): Canon's originals go straight from the
+# plug-in into BACKUP_DIR, so deleting staging can never lose them.
 cleanup() {
     [ -n "$WORK" ] && rm -rf "$WORK" 2>/dev/null || true
-    save_snapshots
     [ -n "$STAGE" ] && rm -rf "$STAGE" 2>/dev/null || true
     if [ "$INSTALL_COMPLETE" != 1 ] && [ "$SERVICES_STOPPED" = 1 ]; then
         echo ""
@@ -134,15 +128,23 @@ SOURCE=""          # installed | download | userpkg
 INSTALL_TYPE="fresh"
 if [ -d "$PLUGIN_DIR" ]; then
     SOURCE="installed"
-    EXISTING=$(python3 -c "
-try:
-    with open('$PLUGIN_RES/EOSWebcamService', 'rb') as f:
-        d = f.read()
-    print('fork' if d[0x89b58:0x89b5c] == bytes.fromhex('20008052') else 'original')
-except Exception:
-    print('original')
-" 2>/dev/null || echo "original")
-    [ "$EXISTING" = "fork" ] && INSTALL_TYPE="upgrade_fork" || INSTALL_TYPE="upgrade_original"
+    # Only these two states are safe to go on from: Canon's complete v1.3.16
+    # originals (back them up, then patch) or the fork's fully patched
+    # binaries (nothing to back up or patch). Anything else (a different
+    # build, a half-patched or truncated binary) could not be restored.
+    if python3 "$PATCHER" --check-patched "$PLUGIN_DIR/Contents" >/dev/null 2>&1; then
+        INSTALL_TYPE="upgrade_fork"
+    elif python3 "$PATCHER" --check-original "$PLUGIN_DIR/Contents" >/dev/null 2>&1; then
+        INSTALL_TYPE="upgrade_original"
+    else
+        echo "  ERROR: the installed EOS Webcam Utility holds neither Canon's complete"
+        echo "         v1.3.16 binaries nor the fork's patched ones:"
+        python3 "$PATCHER" --check-original "$PLUGIN_DIR/Contents" 2>&1 | sed -n 's/^    - /           - /p'
+        echo "         Nothing was changed. If an earlier install stopped part-way, run"
+        echo "         uninstall.sh to restore Canon's originals from its backup; otherwise"
+        echo "         reinstall Canon's v1.3.16 package. Then re-run this."
+        exit 1
+    fi
 elif [ -n "$USER_PKG" ]; then
     SOURCE="userpkg"
 else
@@ -246,11 +248,53 @@ echo ""
 
 # --- Back up existing user config (binaries are snapshotted below, as root) ---
 echo "[4/8] Creating backups..."
-BACKUP_DIR="$INSTALL_DIR/backups/pre-v${VERSION}-$(date +%Y%m%d-%H%M%S)"
-mkdir -p "$BACKUP_DIR"
-cp "$SUPPORT_DIR/config.plist" "$BACKUP_DIR/" 2>/dev/null || true
-cp "$SUPPORT_DIR/proconfig.plist" "$BACKUP_DIR/" 2>/dev/null || true
-echo "  Backup dir: $BACKUP_DIR"
+# SNAPSHOT: new = copy Canon's originals into a new backup dir; reuse = an
+# existing backup already holds exactly the installed originals; none = the
+# installed binaries are already patched, so there are no originals to copy
+# (and nothing below changes them). Each install run used to add another
+# ~11.5 MB backup, patched or not.
+SNAPSHOT=new
+[ "$INSTALL_TYPE" = upgrade_fork ] && SNAPSHOT=none
+EXISTING_BACKUP=""
+# The newest backup that verifies as Canon's originals, in any location.
+while IFS= read -r d; do
+    if python3 "$PATCHER" --check-original "$d" >/dev/null 2>&1; then
+        EXISTING_BACKUP="$d"
+        break
+    fi
+done < <(eoswc_backup_candidates "$INSTALL_DIR")
+if [ "$SNAPSHOT" = new ] && [ "$INSTALL_TYPE" = upgrade_original ] && [ -n "$EXISTING_BACKUP" ]; then
+    # Reusable only from Application Support: root can't read an older
+    # backup left in a privacy-protected clone, and must re-check it.
+    case "$EXISTING_BACKUP" in "$BACKUP_ROOT"/*)
+        if cmp -s "$PLUGIN_BIN/EOSWebcamUtility" "$EXISTING_BACKUP/EOSWebcamUtility" &&
+           cmp -s "$PLUGIN_RES/EOSWebcamService" "$EXISTING_BACKUP/EOSWebcamService" &&
+           cmp -s "$PLUGIN_RES/EWCProxy" "$EXISTING_BACKUP/EWCProxy"; then
+            SNAPSHOT=reuse
+        fi ;;
+    esac
+fi
+if [ "$SNAPSHOT" = new ]; then
+    BACKUP_DIR="$BACKUP_ROOT/pre-v${VERSION}-$(date +%Y%m%d-%H%M%S)"
+    mkdir -p "$BACKUP_DIR"
+    cp "$SUPPORT_DIR/config.plist" "$BACKUP_DIR/" 2>/dev/null || true
+    cp "$SUPPORT_DIR/proconfig.plist" "$BACKUP_DIR/" 2>/dev/null || true
+    echo "  Backup dir: $BACKUP_DIR"
+    echo "  (Canon's original binaries are copied here and verified before anything is patched.)"
+elif [ "$SNAPSHOT" = reuse ]; then
+    BACKUP_DIR="$EXISTING_BACKUP"
+    echo "  Canon's original binaries are already backed up in $BACKUP_DIR"
+    echo "  (it holds exactly the installed files; no new copy needed)."
+else
+    echo "  The installed binaries are already patched: no Canon originals to back up."
+    if [ -n "$EXISTING_BACKUP" ]; then
+        echo "  Existing backup of Canon's originals: $EXISTING_BACKUP"
+    else
+        echo "  WARNING: no backup of Canon's original binaries was found, so uninstall.sh"
+        echo "           will not be able to restore them. Reinstalling Canon's v1.3.16"
+        echo "           package gets them back."
+    fi
+fi
 
 # --- Stop services ---
 echo "[5/8] Stopping existing services..."
@@ -265,16 +309,16 @@ SERVICES_STOPPED=1
 sleep 1
 echo "  Done"
 
-# --- Install (if needed), snapshot originals, patch, sign (single admin step) ---
+# --- Install (if needed), back up originals, patch, sign (single admin step) ---
 echo "[6/8] Installing Canon base (if needed), patching, and signing..."
 # The elevated shell osascript spawns inherits no TCC access to user folders
 # (~/Downloads, ~/Desktop, ~/Documents, iCloud Drive...), so reading the patcher
-# or writing backups there fails with "Operation not permitted" even as root.
-# Everything root touches is staged through the temp dir instead, and moved back
-# by this (unelevated) shell afterwards.
+# or the .pkg there fails with "Operation not permitted" even as root. Those are
+# staged through a temp dir. The backup goes to BACKUP_DIR in Application
+# Support, which root can write, so Canon's originals never sit only in a temp
+# dir that macOS may purge.
 STAGE="$(mktemp -d -t eoswc-stage)"
 cp "$PATCHER" "$STAGE/patch-binaries.py"
-mkdir -p "$STAGE/orig"
 if [ "$NEED_INSTALLER" = 1 ]; then
     # -R: a .pkg is either a flat file or a bundle-style directory.
     cp -R "$PKG_FILE" "$STAGE/canon.pkg"
@@ -284,11 +328,33 @@ ROOT_SCRIPT="$STAGE/deploy.sh"
     echo '#!/bin/bash'
     echo 'set -e'
     [ "$NEED_INSTALLER" = 1 ] && echo "installer -pkg '$STAGE/canon.pkg' -target /"
-    # Snapshot the pristine originals before patching so uninstall can restore them.
-    echo "for f in '$PLUGIN_BIN/EOSWebcamUtility' '$PLUGIN_RES/EOSWebcamService' '$PLUGIN_RES/EWCProxy' '$PLUGIN_RES/EWCPairingService' '$PLUGIN_RES/errorNoDevice.jpg' '$PLUGIN_RES/errorBusy.jpg' '$PLUGIN_RES/default.jpg'; do [ -e \"\$f\" ] && cp \"\$f\" '$STAGE/orig/' 2>/dev/null || true; done"
-    # Never patch without a restorable snapshot of the three patched binaries.
-    echo "for f in EOSWebcamUtility EOSWebcamService EWCProxy; do [ -s '$STAGE/orig/'\$f ] || { echo \"ERROR: could not back up \$f; nothing was patched.\" >&2; exit 1; }; done"
-    echo "/usr/bin/python3 '$STAGE/patch-binaries.py' '$PLUGIN_DIR/Contents'"
+    # Every value interpolated into these lines is shell-quoted (eoswc_sq):
+    # $HOME and the user name end up in root's command line.
+    Q_PATCHER="$(eoswc_sq "$STAGE/patch-binaries.py")"
+    Q_BACKUP="$(eoswc_sq "$BACKUP_DIR")"
+    case "$SNAPSHOT" in
+    new)
+        # Back up the pristine originals and verify the backup before patching:
+        # never patch without a restorable copy of the three patched binaries.
+        for f in "$PLUGIN_BIN/EOSWebcamUtility" "$PLUGIN_RES/EOSWebcamService" "$PLUGIN_RES/EWCProxy"; do
+            echo "cp $(eoswc_sq "$f") $Q_BACKUP/ || { echo 'ERROR: could not back up $(basename "$f"); nothing was patched.' >&2; exit 1; }"
+        done
+        for f in EWCPairingService errorNoDevice.jpg errorBusy.jpg default.jpg; do
+            echo "[ ! -e $(eoswc_sq "$PLUGIN_RES/$f") ] || cp $(eoswc_sq "$PLUGIN_RES/$f") $Q_BACKUP/ 2>/dev/null || true"
+        done
+        echo "chown -R $(eoswc_sq "$USERNAME") $Q_BACKUP 2>/dev/null || true"
+        echo "/usr/bin/python3 $Q_PATCHER --check-original $Q_BACKUP || { echo 'ERROR: the backup does not hold complete original Canon v1.3.16 binaries; nothing was patched.' >&2; exit 1; }" ;;
+    reuse)
+        # The existing backup must still hold exactly what is installed.
+        for f in "$PLUGIN_BIN/EOSWebcamUtility" "$PLUGIN_RES/EOSWebcamService" "$PLUGIN_RES/EWCProxy"; do
+            echo "cmp -s $(eoswc_sq "$f") $(eoswc_sq "$BACKUP_DIR/$(basename "$f")") || { echo 'ERROR: $(basename "$f") no longer matches the backup; nothing was patched. Re-run the installer.' >&2; exit 1; }"
+        done
+        echo "/usr/bin/python3 $Q_PATCHER --check-original $Q_BACKUP || { echo 'ERROR: the backup does not hold complete original Canon v1.3.16 binaries; nothing was patched.' >&2; exit 1; }" ;;
+    none)
+        # No backup was taken, so only go on if there is nothing left to patch.
+        echo "/usr/bin/python3 $Q_PATCHER --check-patched $(eoswc_sq "$PLUGIN_DIR/Contents") || { echo 'ERROR: the plug-in is not fully patched and no backup was taken; nothing was patched. Re-run the installer.' >&2; exit 1; }" ;;
+    esac
+    echo "/usr/bin/python3 $Q_PATCHER $(eoswc_sq "$PLUGIN_DIR/Contents")"
     echo "chmod 755 '$PLUGIN_BIN/EOSWebcamUtility' '$PLUGIN_RES/EOSWebcamService' '$PLUGIN_RES/EWCProxy'"
     echo "chmod 666 '$PLUGIN_RES/errorNoDevice.jpg' 2>/dev/null || true"
     echo "chmod 666 '$PLUGIN_RES/errorBusy.jpg' 2>/dev/null || true"
@@ -297,24 +363,24 @@ ROOT_SCRIPT="$STAGE/deploy.sh"
     echo "codesign --force --sign - '$PLUGIN_RES/EOSWebcamService'"
     echo "codesign --force --sign - '$PLUGIN_RES/EWCProxy'"
     echo "codesign --force --deep --sign - '$PLUGIN_DIR'"
-    echo "chown -R '$USERNAME' '$STAGE/orig' 2>/dev/null || true"
 } > "$ROOT_SCRIPT"
 chmod 700 "$ROOT_SCRIPT"
-osascript -e "do shell script \"bash '$ROOT_SCRIPT'\" with administrator privileges"
-# Pull the snapshots back out of staging (this shell does have folder access).
-save_snapshots
-BACKUP_OK=1
-for f in EOSWebcamUtility EOSWebcamService EWCProxy; do
-    [ -s "$BACKUP_DIR/$f" ] || BACKUP_OK=0
-done
-if [ "$BACKUP_OK" = 1 ]; then
-    rm -rf "$STAGE"
-else
-    # Keep the staged originals rather than delete the only copy.
-    echo "  WARNING: could not copy Canon's original binaries into $BACKUP_DIR."
-    echo "           They are still in $STAGE/orig — copy them there by hand,"
-    echo "           or uninstall.sh won't be able to restore them."
+if ! osascript -e "do shell script \"bash '$ROOT_SCRIPT'\" with administrator privileges"; then
+    echo ""
+    echo "  ERROR: the admin step failed (see above)."
+    if [ "$SNAPSHOT" != none ] && python3 "$PATCHER" --check-original "$BACKUP_DIR" >/dev/null 2>&1; then
+        # The backup is verified before the patcher runs, so the patcher may
+        # have run and stopped part-way.
+        echo "  Canon's original binaries are safe in $BACKUP_DIR"
+        echo "  (verified). If the plug-in was left part-patched, run uninstall.sh to"
+        echo "  restore them, then re-run the installer."
+    else
+        # Without a verified backup the root step stops before the patcher.
+        echo "  Nothing was patched."
+    fi
+    exit 1
 fi
+rm -rf "$STAGE"
 STAGE=""
 echo "  Patched and signed"
 
@@ -455,7 +521,7 @@ echo "  Mode:           ${INSTALL_TYPE}"
 echo "  Resolution:     1920x1080 @ 30fps"
 echo "  EOS Service:    $([ "$SVC" -gt 0 ] && echo "RUNNING" || echo "NOT RUNNING")"
 echo "  Camera Manager: $([ "$MGR" -gt 0 ] && echo "RUNNING" || echo "NOT RUNNING")"
-echo "  Backups:        $BACKUP_DIR"
+echo "  Backups:        ${BACKUP_DIR:-${EXISTING_BACKUP:-none (see the warning above)}}"
 if [ "$SVC" = 0 ] || [ "$MGR" = 0 ]; then
     echo ""
     echo "  Something isn't running. Check $LOG_DIR/eos-camera-manager-stderr.log"

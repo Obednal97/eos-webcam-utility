@@ -342,6 +342,20 @@ test_upgrade_from_another_clone_copies_its_backup_only_once() {
     [ "$(count_backups)" = 1 ] || fail "expected one copy in Application Support, have $(count_backups)"
 }
 
+# VM scenario 7: the unprivileged side's EXIT trap deleted staging while the
+# root step was still running, so root couldn't open the staged patcher to
+# check the backup. That must not be reported as a bad backup.
+test_staging_vanishing_mid_root_step_is_reported_as_such() {
+    make_canon_install
+    export STUB_ROOT_VANISH_STAGED=1
+    run_install; assert_status "$RC" 1
+    assert_lacks "$OUT" "does not hold complete original Canon v1.3.16 binaries"
+    assert_contains "$OUT" "staging folder disappeared"
+    assert_lacks "$OUT" "Installation complete!"
+    holds_originals "$EOSWC_PLUGIN_DIR/Contents" || fail "plug-in changed"
+    holds_originals "$(latest_backup)" || fail "backup does not verify"
+}
+
 test_refuses_an_install_missing_a_binary() {
     make_canon_install
     rm -f "${RES:?}/EWCProxy"

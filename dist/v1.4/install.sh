@@ -352,6 +352,10 @@ ROOT_SCRIPT="$STAGE/deploy.sh"
     # $HOME and the user name end up in root's command line.
     Q_PATCHER="$(eoswc_sq "$STAGE/patch-binaries.py")"
     Q_BACKUP="$(eoswc_sq "$BACKUP_DIR")"
+    # If a check below fails because the staged patcher is gone, say so: this
+    # shell's EXIT trap deletes staging, so an installer that stopped (e.g.
+    # killed) while root ran leaves root without it. That is not a bad backup.
+    STAGE_GONE_CHECK="[ -f $Q_PATCHER ] || { echo 'ERROR: the installer staging folder disappeared while the admin step was running (the installer was stopped part-way), so the check could not run; nothing was patched. Re-run the installer.' >&2; exit 1; };"
     case "$SNAPSHOT" in
     new)
         # Back up the pristine originals and verify the backup before patching:
@@ -363,16 +367,16 @@ ROOT_SCRIPT="$STAGE/deploy.sh"
             echo "[ ! -e $(eoswc_sq "$PLUGIN_RES/$f") ] || cp $(eoswc_sq "$PLUGIN_RES/$f") $Q_BACKUP/ 2>/dev/null || true"
         done
         echo "chown -R $(eoswc_sq "$USERNAME") $Q_BACKUP 2>/dev/null || true"
-        echo "/usr/bin/python3 $Q_PATCHER --check-original $Q_BACKUP || { echo 'ERROR: the backup does not hold complete original Canon v1.3.16 binaries; nothing was patched.' >&2; exit 1; }" ;;
+        echo "/usr/bin/python3 $Q_PATCHER --check-original $Q_BACKUP || { $STAGE_GONE_CHECK echo 'ERROR: the backup does not hold complete original Canon v1.3.16 binaries; nothing was patched.' >&2; exit 1; }" ;;
     reuse)
         # The existing backup must still hold exactly what is installed.
         for f in "$PLUGIN_BIN/EOSWebcamUtility" "$PLUGIN_RES/EOSWebcamService" "$PLUGIN_RES/EWCProxy"; do
             echo "cmp -s $(eoswc_sq "$f") $(eoswc_sq "$BACKUP_DIR/$(basename "$f")") || { echo 'ERROR: $(basename "$f") no longer matches the backup; nothing was patched. Re-run the installer.' >&2; exit 1; }"
         done
-        echo "/usr/bin/python3 $Q_PATCHER --check-original $Q_BACKUP || { echo 'ERROR: the backup does not hold complete original Canon v1.3.16 binaries; nothing was patched.' >&2; exit 1; }" ;;
+        echo "/usr/bin/python3 $Q_PATCHER --check-original $Q_BACKUP || { $STAGE_GONE_CHECK echo 'ERROR: the backup does not hold complete original Canon v1.3.16 binaries; nothing was patched.' >&2; exit 1; }" ;;
     none)
         # No backup was taken, so only go on if there is nothing left to patch.
-        echo "/usr/bin/python3 $Q_PATCHER --check-patched $(eoswc_sq "$PLUGIN_DIR/Contents") || { echo 'ERROR: the plug-in is not fully patched and no backup was taken; nothing was patched. Re-run the installer.' >&2; exit 1; }" ;;
+        echo "/usr/bin/python3 $Q_PATCHER --check-patched $(eoswc_sq "$PLUGIN_DIR/Contents") || { $STAGE_GONE_CHECK echo 'ERROR: the plug-in is not fully patched and no backup was taken; nothing was patched. Re-run the installer.' >&2; exit 1; }" ;;
     esac
     echo "/usr/bin/python3 $Q_PATCHER $(eoswc_sq "$PLUGIN_DIR/Contents")"
     echo "chmod 755 '$PLUGIN_BIN/EOSWebcamUtility' '$PLUGIN_RES/EOSWebcamService' '$PLUGIN_RES/EWCProxy'"

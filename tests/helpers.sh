@@ -118,7 +118,7 @@ enter_sandbox() {
     export TCC_PROTECTED="$HOME/Downloads"
     export FIXTURES
     export PATH="$STUBS_DIR:/usr/bin:/bin:/usr/sbin:/sbin"
-    unset STUB_OSASCRIPT_CANCEL STUB_ROOT_READONLY STUB_INSTALLER_ARGS
+    unset STUB_OSASCRIPT_CANCEL STUB_ROOT_READONLY STUB_INSTALLER_ARGS STUB_ROOT_VANISH_STAGED
 
     mkdir -p "$HOME/Downloads" "$HOME/Desktop" "$HOME/Library/LaunchAgents" \
              "$HOME/Library/Logs" "$TMPDIR"

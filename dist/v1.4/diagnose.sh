@@ -640,13 +640,42 @@ echo; echo "----- Is the plug-in installed? -----"
 ls -lan "$(dirname "$PLUGIN")/" 2>&1
 
 echo; echo "----- Plug-in code signature -----"
-echo "(the executable should be present and signed 'adhoc'; that is expected for this fork)"
+echo "(with the fork installed the executable is signed 'adhoc'; after an uninstall from a"
+echo " full backup (installers after v1.4.2) it is Canon's again, TeamIdentifier=$EOSWC_CANON_TEAM)"
 codesign -dv --verbose=4 "$PLUGIN/Contents/MacOS/EOSWebcamUtility" 2>&1
 echo "-- bundle verify (informational only) --"
 echo "NOTE: 'a sealed resource is missing or invalid' here is EXPECTED and harmless —"
 echo "the camera-manager swaps the loading-screen image inside the bundle after signing."
 echo "It is NOT the cause of the camera failing to appear."
 codesign --verify --deep --strict -vv "$PLUGIN" 2>&1
+
+echo; echo "----- Service and EWCProxy signatures -----"
+echo "(installed by the fork: ad hoc, flags=0x10002(adhoc,runtime), with Canon's camera"
+echo " entitlement and disable-library-validation, which lets them load Canon's EDSDK;"
+echo " Canon's own, e.g. after uninstall: flags=0x10000(runtime), team=$EOSWC_CANON_TEAM)"
+for h in EOSWebcamService EWCProxy; do
+    info="$(codesign -dv "$PLUGIN/Contents/Resources/$h" 2>&1)" || true
+    flags="$(printf '%s\n' "$info" | sed -n 's/^CodeDirectory .*flags=\([^ ]*\).*/\1/p' | head -1)"
+    team="$(printf '%s\n' "$info" | sed -n 's/^TeamIdentifier=//p' | head -1)"
+    ents="$(codesign -d --entitlements - "$PLUGIN/Contents/Resources/$h" 2>&1 |
+            grep -oE 'com\.apple\.security\.[a-z.-]+' | sort -u | tr '\n' ' ')" || true
+    echo "$h: flags=${flags:-unsigned or missing} team=${team:-none} entitlements: ${ents:-none}"
+done
+# Only counts: crash reports hold paths and names. A helper that can't load
+# EDSDK (library validation) dies at launch, before it logs anything itself.
+CRASH_DIR="$HOME/Library/Logs/DiagnosticReports"
+CRASHES=0
+SIGN_CRASHES=0
+if [ -d "$CRASH_DIR" ]; then
+    while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        CRASHES=$((CRASHES + 1))
+        if grep -qiE 'Team IDs|library validation|not valid for use in process|CODESIGNING|Library missing' "$f" 2>/dev/null; then
+            SIGN_CRASHES=$((SIGN_CRASHES + 1))
+        fi
+    done < <(find "$CRASH_DIR" -maxdepth 1 -type f \( -name 'EOSWebcamService*' -o -name 'EWCService*' -o -name 'EWCProxy*' \) -mtime -7 2>/dev/null)
+fi
+echo "crash reports of the service or EWCProxy in the last 7 days: $CRASHES ($SIGN_CRASHES about code signing or library loading)"
 
 echo; echo "----- Quarantine flags -----"
 echo "(a quarantine flag on a .jpg image is harmless; one on the .plugin bundle or its"
@@ -761,6 +790,12 @@ else
     echo "       Most likely: it isn't installed, or wasn't (re)installed after a macOS upgrade."
     echo "       Fix: re-run the installer ->  bash dist/v1.4/install.sh"
     echo "       Then reboot and run this diagnostic again."
+fi
+if [ "$SIGN_CRASHES" -gt 0 ]; then
+    echo "[WARN] EOSWebcamService or EWCProxy crashed with a code-signing or library-loading"
+    echo "       error ($SIGN_CRASHES crash report(s), see 'Service and EWCProxy signatures')."
+    echo "       Please open an issue with this report. uninstall.sh puts Canon's signed"
+    echo "       plug-in back."
 fi
 if ! eoswc_job_running "$EOSWC_AGENT_LABEL"; then
     echo "[WARN] The camera manager isn't running, so auto-retry and the loading screens"

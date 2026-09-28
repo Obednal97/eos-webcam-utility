@@ -37,6 +37,13 @@ make_backup() {
     echo "$dir"
 }
 
+# The bundle is re-signed when restoring from a backup with only the three
+# binaries, so its executable is Canon's code with a new signature.
+assert_same_code() {
+    /usr/bin/python3 -B "$CLONE/dist/v1.4/patch-binaries.py" --same-code "$1" "$2" >/dev/null 2>&1 ||
+        fail "$1 and $2 are not the same code"
+}
+
 # A patched, running fork install, as install.sh leaves it.
 make_fork_install() {
     /usr/bin/python3 "$FIXTURES/make-canon-plugin.py" "$EOSWC_PLUGIN_DIR" --patched
@@ -123,7 +130,7 @@ test_restores_from_app_support_and_keeps_the_backup() {
     assert_contains "$OUT" "Restoring from backup: $good"
     assert_contains "$OUT" "Original binaries restored"
     assert_contains "$OUT" "Uninstall complete."
-    assert_same "$BIN/EOSWebcamUtility" "$good/EOSWebcamUtility"
+    assert_same_code "$good" "$EOSWC_PLUGIN_DIR/Contents"
     assert_same "$RES/EOSWebcamService" "$good/EOSWebcamService"
     assert_same "$RES/EWCProxy" "$good/EWCProxy"
     assert_same "$RUNTIME/config.plist" "$good/config.plist"
@@ -180,7 +187,7 @@ test_restores_from_protected_clone_and_removes_everything() {
     # Root copied from staging, not from the clone (which it can't read).
     assert_log_matches "^cp '/[^']*/eoswc-restore\.[A-Za-z0-9]+/EOSWebcamService' "
     assert_lacks "$STUB_LOG" "cp '$CLONE"
-    assert_same "$BIN/EOSWebcamUtility" "$good/EOSWebcamUtility"
+    assert_same_code "$good" "$EOSWC_PLUGIN_DIR/Contents"
     assert_same "$RES/EOSWebcamService" "$good/EOSWebcamService"
     assert_same "$RES/EWCProxy" "$good/EWCProxy"
     assert_same "$RES/errorNoDevice.jpg" "$good/errorNoDevice.jpg"
@@ -257,6 +264,107 @@ test_failed_restore_is_reported_as_failure() {
     assert_file "$RUNTIME/eos-camera-manager.sh"
     holds_originals "$good" || fail "backup no longer verifies"
     assert_contains "$STUB_LOG" "launchctl load $AGENT"
+}
+
+# --- restoring Canon's signed plug-in (M6) ---
+calls_only() { sed '/--- root script ---/,/--- end root script ---/d' "$STUB_LOG"; }
+# A real install over Canon's (fake) plug-in: its backup holds the whole
+# signed bundle.
+install_over_canon() {
+    make_canon_install
+    run_install; assert_status "$RC" 0
+    BACKUP="$(latest_backup)"
+    [ -d "$BACKUP/EOSWebcamUtility.plugin" ] || fail "setup: the install made no bundle backup"
+    : > "$STUB_LOG"
+}
+
+test_restores_canons_signed_plugin_byte_for_byte_without_re_signing() {
+    install_over_canon
+    holds_patched "$EOSWC_PLUGIN_DIR/Contents" || fail "setup: not patched"
+    run_uninstall; assert_status "$RC" 0
+    assert_contains "$OUT" "The backup holds Canon's signed plug-in: it goes back byte for byte"
+    assert_contains "$OUT" "Canon's signature is back (Team ID NC5A977249); nothing was re-signed."
+    # Every file, the signature and Info.plist included, is Canon's again.
+    diff -r "$EOSWC_PLUGIN_DIR" "$ORIG" > "$SANDBOX/diff.txt" 2>&1 ||
+        fail "restored plug-in differs from Canon's: $(head -5 "$SANDBOX/diff.txt")"
+    calls_only > "$SANDBOX/calls.txt"
+    assert_lacks "$SANDBOX/calls.txt" "codesign --force"
+    # It verifies strictly, as Canon's, with no re-sign needed.
+    codesign --verify --deep --strict -R "=anchor apple generic and certificate leaf[subject.OU] = NC5A977249" \
+        "$EOSWC_PLUGIN_DIR" 2>"$SANDBOX/verify.txt" || fail "codesign --verify --deep --strict failed: $(cat "$SANDBOX/verify.txt")"
+    codesign -dv "$RES/EWCProxy" 2>&1 | grep -q "TeamIdentifier=NC5A977249" || fail "EWCProxy is not Canon-signed"
+    # Root copied the staged bundle with ditto, never the clone or the backup
+    # in place.
+    assert_log_matches "^ditto '/[^']*/eoswc-restore\\.[A-Za-z0-9]+/EOSWebcamUtility\\.plugin' '$EOSWC_PLUGIN_DIR'$"
+    holds_originals "$BACKUP" || fail "backup no longer verifies"
+}
+
+test_bundle_restore_puts_the_recorded_owner_back() {
+    install_over_canon
+    local owner
+    owner="$(head -1 "$BACKUP/plugin.owner")"
+    printf '%s\n' "$owner" | grep -qE '^[0-9]+:[0-9]+$' || fail "no owner recorded: '$owner'"
+    run_uninstall; assert_status "$RC" 0
+    assert_log_matches "^chown -h '$owner' '$EOSWC_PLUGIN_DIR/Contents/Resources/errorNoDevice\\.jpg'$"
+    assert_log_matches "^chown -h '$owner' '$EOSWC_PLUGIN_DIR'$"
+}
+
+# A bundle in the backup that doesn't verify (here: a resource changed after
+# the backup was made) isn't used: the binaries are restored instead.
+test_a_bundle_backup_that_does_not_verify_falls_back_to_the_binaries() {
+    install_over_canon
+    echo tampered > "$BACKUP/EOSWebcamUtility.plugin/Contents/Resources/default.jpg"
+    run_uninstall; assert_status "$RC" 0
+    assert_contains "$OUT" "the plug-in bundle in this backup doesn't verify"
+    assert_contains "$OUT" "holds Canon's three binaries"
+    holds_originals "$EOSWC_PLUGIN_DIR/Contents" || fail "binaries not restored"
+    assert_log_matches "^codesign --force --sign - $EOSWC_PLUGIN_DIR$"
+}
+
+# Legacy backups (three binaries): still restorable. The helpers keep the
+# signature the backup has (Canon's); only the bundle is re-signed ad hoc,
+# and the output says why and how to get Canon's exact plug-in back.
+test_legacy_backup_restores_with_a_clear_message_and_re_signs_only_the_bundle() {
+    make_fork_install
+    local good
+    good="$(make_backup new pre-v1.4.1-20260920-100000 originals)"
+    run_uninstall; assert_status "$RC" 0
+    assert_contains "$OUT" "This backup was made by an older installer and holds Canon's three binaries,"
+    assert_contains "$OUT" "reinstall"
+    assert_contains "$OUT" "https://downloads.canon.com/webcam/EOSWebcamUtility-MAC1.3.16.pkg.zip"
+    assert_contains "$OUT" "The plug-in bundle is signed ad hoc (restored from an older backup, see above)."
+    assert_same "$RES/EOSWebcamService" "$good/EOSWebcamService"
+    assert_same "$RES/EWCProxy" "$good/EWCProxy"
+    calls_only > "$SANDBOX/calls.txt"
+    assert_lacks "$SANDBOX/calls.txt" "codesign --force --sign - --identifier"
+    grep -qx "codesign --force --sign - $EOSWC_PLUGIN_DIR" "$SANDBOX/calls.txt" || fail "bundle not re-signed"
+    codesign -dv "$RES/EOSWebcamService" 2>&1 | grep -q "TeamIdentifier=NC5A977249" || fail "EOSWebcamService lost Canon's signature"
+    codesign --verify --deep --strict "$EOSWC_PLUGIN_DIR" 2>/dev/null || fail "restored bundle does not verify"
+}
+
+# A helper in a legacy backup whose signature doesn't verify is re-signed
+# the way install.sh signs.
+test_legacy_restore_re_signs_a_helper_that_does_not_verify() {
+    make_fork_install
+    local good
+    good="$(make_backup new pre-v1.4.1-20260920-100000 originals)"
+    /usr/bin/python3 "$FIXTURES/make-canon-plugin.py" "$SANDBOX/unsigned" --sig none
+    cp "$SANDBOX/unsigned/Contents/Resources/EWCProxy" "$good/EWCProxy"
+    run_uninstall; assert_status "$RC" 0
+    assert_log_matches "^codesign --force --sign - --identifier EWCProxy --options runtime --entitlements /[^ ]*/eoswc-restore\\.[A-Za-z0-9]+/entitlements\\.plist $RES/EWCProxy$"
+    codesign -dv "$RES/EWCProxy" 2>&1 | grep -q "flags=0x10002(adhoc,runtime)" || fail "EWCProxy not re-signed with the runtime"
+    calls_only > "$SANDBOX/calls.txt"
+    assert_lacks "$SANDBOX/calls.txt" "--identifier EWCService"
+}
+
+test_extra_files_in_the_plugin_are_reported_not_deleted() {
+    install_over_canon
+    echo PNG > "$RES/logo.png"
+    run_uninstall; assert_status "$RC" 0
+    assert_contains "$OUT" "WARNING: the restored plug-in doesn't pass codesign --verify --deep --strict"
+    assert_contains "$OUT" "$RES/logo.png"
+    assert_file "$RES/logo.png"
+    holds_originals "$EOSWC_PLUGIN_DIR/Contents" || fail "binaries not restored"
 }
 
 # VM scenario 6b, uninstall side: v1.4.1 is still installed from another

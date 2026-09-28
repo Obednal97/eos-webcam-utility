@@ -14,6 +14,13 @@ assert_backup_of_originals() {
     assert_same "$b/EOSWebcamUtility" "$ORIG/Contents/MacOS/EOSWebcamUtility"
     assert_same "$b/EOSWebcamService" "$ORIG/Contents/Resources/EOSWebcamService"
     assert_same "$b/EWCProxy" "$ORIG/Contents/Resources/EWCProxy"
+    # The whole signed bundle, byte for byte, with the flat files as hard
+    # links into it (no second copy).
+    [ -d "$b/EOSWebcamUtility.plugin" ] || { fail "backup $b has no plug-in bundle"; return 0; }
+    diff -r "$b/EOSWebcamUtility.plugin" "$ORIG" > "$SANDBOX/bundle-diff.txt" 2>&1 ||
+        fail "the backed-up bundle differs from Canon's: $(head -3 "$SANDBOX/bundle-diff.txt")"
+    [ "$b/EWCProxy" -ef "$b/EOSWebcamUtility.plugin/Contents/Resources/EWCProxy" ] || fail "flat EWCProxy is not a hard link into the bundle"
+    [ "$b/EOSWebcamUtility" -ef "$b/EOSWebcamUtility.plugin/Contents/MacOS/EOSWebcamUtility" ] || fail "flat EOSWebcamUtility is not a hard link"
 }
 
 assert_daemon_in_runtime_dir() {
@@ -43,7 +50,7 @@ test_patches_existing_install_from_protected_clone() {
     assert_backup_of_originals "$(latest_backup)"
     assert_file "$(latest_backup)/errorBusy.jpg"
     assert_no_file "$(legacy_backup_root)"
-    assert_log_matches "^cp '[^']*/EWCProxy' '$(backup_root)/pre-v[^']*'/ "
+    assert_log_matches "^ditto '$EOSWC_PLUGIN_DIR' '$(backup_root)/pre-v[^']*/EOSWebcamUtility\.plugin'"
     assert_lacks "$SANDBOX/root.txt" "/orig/"
     # The backup was verified before the patcher ran.
     grep -n -e "--check-original '$(backup_root)" -e "patch-binaries.py' '$EOSWC_PLUGIN_DIR/Contents'" "$SANDBOX/root.txt" \
@@ -160,16 +167,18 @@ test_unwritable_backup_aborts_before_patching() {
     make_canon_install
     STUB_ROOT_READONLY="$(backup_root)"; export STUB_ROOT_READONLY
     run_install
-    assert_contains "$OUT" "could not back up EOSWebcamUtility; nothing was patched."
+    assert_contains "$OUT" "could not back up the plug-in (EOSWebcamUtility.plugin); nothing was patched."
     assert_aborted_unpatched
     holds_originals "$EOSWC_PLUGIN_DIR/Contents" || fail "plug-in no longer holds the originals"
 }
 
 test_failed_patch_keeps_verified_originals_in_app_support() {
     make_canon_install
-    # The patcher dies writing EOSWebcamService, after EOSWebcamUtility.
-    chmod 444 "$RES/EOSWebcamService"
+    # The patcher dies writing EOSWebcamService, after EOSWebcamUtility: it
+    # can't create its temp file in a read-only Resources dir.
+    chmod 555 "$RES"
     run_install; assert_status "$RC" 1
+    chmod 755 "$RES"
     assert_contains "$OUT" "Permission denied"
     # Root rolled the half-patched plug-in back from the verified backup
     # instead of leaving EOSWebcamUtility patched with a broken signature.
@@ -187,6 +196,8 @@ test_failed_patch_keeps_verified_originals_in_app_support() {
 
 # Backups of the installed originals already in Application Support.
 count_backups() { ls -d "$(backup_root)"/pre-v* 2>/dev/null | wc -l | tr -d ' '; }
+# A backup of the live plug-in as an older installer made it: the three
+# binaries only.
 backup_of_live() {
     local dir
     dir="$(backup_root)/$1"
@@ -194,19 +205,91 @@ backup_of_live() {
     cp "$BIN/EOSWebcamUtility" "$RES/EOSWebcamService" "$RES/EWCProxy" "$dir/"
     echo "$dir"
 }
+# ... and as this version makes it: the whole signed bundle, flat hard links.
+bundle_backup_of_live() {
+    local dir f
+    dir="$(backup_root)/$1"
+    mkdir -p "$dir"
+    ditto "$EOSWC_PLUGIN_DIR" "$dir/EOSWebcamUtility.plugin"
+    for f in MacOS/EOSWebcamUtility Resources/EOSWebcamService Resources/EWCProxy; do
+        ln "$dir/EOSWebcamUtility.plugin/Contents/$f" "$dir/"
+    done
+    echo "$dir"
+}
+# The installed plug-in's binaries, re-signed ad hoc the way uninstallers
+# before this version left Canon's originals (same code, new signature).
+resign_live_like_old_uninstall() {
+    codesign --force --sign - "$RES/EOSWebcamService" 2>/dev/null
+    codesign --force --sign - "$RES/EWCProxy" 2>/dev/null
+    codesign --force --deep --sign - "$EOSWC_PLUGIN_DIR" 2>/dev/null
+}
 
 test_rerun_over_canon_reuses_a_matching_backup() {
     make_canon_install
     local existing
-    existing="$(backup_of_live pre-v1.4.1-20260101-100000)"
+    existing="$(bundle_backup_of_live pre-v1.4.3-20260101-100000)"
     run_install; assert_status "$RC" 0
     assert_contains "$OUT" "already backed up in $existing"
+    assert_contains "$OUT" "it holds exactly the installed files"
     assert_contains "$OUT" "Backups:        $existing"
     [ "$(count_backups)" = 1 ] || fail "expected no new backup, have $(count_backups)"
     # Root re-checked it against the installed files before patching.
-    assert_log_matches "^cmp -s '[^']*/EWCProxy' '$(backup_root)/pre-v1.4.1-20260101-100000/EWCProxy'"
+    assert_log_matches "--same-code '$existing' '$EOSWC_PLUGIN_DIR/Contents'"
     holds_patched "$EOSWC_PLUGIN_DIR/Contents" || fail "plug-in not patched"
     holds_originals "$existing" || fail "backup no longer verifies"
+}
+
+# Goal: no new ~11.5 MB backup per uninstall/reinstall. An older uninstall
+# re-signed Canon's originals ad hoc, so the installed files no longer match
+# the (Canon-signed) backup byte for byte: still the same code, so reused.
+test_rerun_over_re_signed_originals_reuses_the_older_backup() {
+    make_canon_install
+    local existing
+    existing="$(backup_of_live pre-v1.4.1-20260101-100000)"
+    resign_live_like_old_uninstall
+    ! cmp -s "$RES/EWCProxy" "$existing/EWCProxy" || fail "setup: not re-signed"
+    run_install; assert_status "$RC" 0
+    assert_contains "$OUT" "already backed up in $existing"
+    assert_contains "$OUT" "the same code, re-signed by an earlier uninstall"
+    [ "$(count_backups)" = 1 ] || fail "expected no new backup, have $(count_backups)"
+    assert_log_matches "--same-code '$existing' '$EOSWC_PLUGIN_DIR/Contents'"
+    # The backup still has Canon's signatures, untouched.
+    assert_same "$existing/EWCProxy" "$ORIG/Contents/Resources/EWCProxy"
+    holds_patched "$EOSWC_PLUGIN_DIR/Contents" || fail "plug-in not patched"
+}
+
+# An older backup has only the three binaries; the installed plug-in is
+# Canon's own signed bundle. One full backup is taken (so uninstall can put
+# Canon's signature back); after an uninstall, reinstalling reuses it.
+test_legacy_backup_over_a_canon_signed_plugin_is_upgraded_once() {
+    make_canon_install
+    local legacy full
+    legacy="$(backup_of_live pre-v1.4.1-20260101-100000)"
+    touch -t 202601010000 "$legacy"
+    run_install; assert_status "$RC" 0
+    assert_contains "$OUT" "has only Canon's three binaries, but the installed"
+    [ "$(count_backups)" = 2 ] || fail "expected one full backup next to the old one, have $(count_backups)"
+    full="$(latest_backup)"
+    [ -d "$full/EOSWebcamUtility.plugin" ] || fail "the new backup has no plug-in bundle"
+    run_uninstall; assert_status "$RC" 0
+    assert_contains "$OUT" "Restoring from backup: $full"
+    run_install; assert_status "$RC" 0
+    assert_contains "$OUT" "already backed up in $full"
+    [ "$(count_backups)" = 2 ] || fail "reinstall made another backup: have $(count_backups)"
+}
+
+# The whole cycle from a fresh Canon install: install, uninstall,
+# reinstall, uninstall, reinstall makes one backup, not three.
+test_install_uninstall_cycles_make_one_backup() {
+    make_canon_install
+    local i
+    for i in 1 2 3; do
+        run_install; assert_status "$RC" 0
+        [ "$i" = 1 ] || assert_contains "$OUT" "already backed up in"
+        run_uninstall; assert_status "$RC" 0
+    done
+    [ "$(count_backups)" = 1 ] || fail "expected one backup after three cycles, have $(count_backups)"
+    diff -r "$EOSWC_PLUGIN_DIR" "$ORIG" > "$SANDBOX/diff.txt" 2>&1 || fail "plug-in is not byte-identical to Canon's after the cycles: $(head -3 "$SANDBOX/diff.txt")"
 }
 
 test_rerun_over_canon_backs_up_again_if_the_backup_differs() {
@@ -230,6 +313,119 @@ test_legacy_clone_backup_is_not_reused() {
     run_install; assert_status "$RC" 0
     [ "$(count_backups)" = 1 ] || fail "expected one backup in Application Support, have $(count_backups)"
     assert_backup_of_originals "$(latest_backup)"
+}
+
+# --- signing (M6) ---
+# The call log without the root script text osascript records.
+calls_only() { sed '/--- root script ---/,/--- end root script ---/d' "$STUB_LOG"; }
+# What (fake) codesign says about a signed file.
+sig_info() { codesign -dv "$1" 2>&1; codesign -d --entitlements - "$1" 2>&1; }
+
+assert_signed_like_canon_ad_hoc() {  # the two helpers, after install
+    local h id
+    for h in EOSWebcamService:EWCService EWCProxy:EWCProxy; do
+        id="${h#*:}"; h="$RES/${h%%:*}"
+        sig_info "$h" > "$SANDBOX/sig.txt"
+        assert_contains "$SANDBOX/sig.txt" "Identifier=$id"
+        assert_contains "$SANDBOX/sig.txt" "flags=0x10002(adhoc,runtime)"
+        assert_contains "$SANDBOX/sig.txt" "com.apple.security.device.camera"
+        assert_contains "$SANDBOX/sig.txt" "com.apple.security.cs.disable-library-validation"
+        codesign --verify --strict "$h" 2>/dev/null || fail "$h does not verify"
+    done
+    # The DAL plug-in's own executable: ad hoc, no runtime (Canon's has none).
+    sig_info "$EOSWC_PLUGIN_DIR" > "$SANDBOX/sig.txt"
+    assert_contains "$SANDBOX/sig.txt" "flags=0x2(adhoc)"
+}
+
+test_install_keeps_canons_runtime_and_entitlements_when_re_signing() {
+    make_canon_install
+    run_install; assert_status "$RC" 0
+    assert_contains "$OUT" "Patched and signed (ad hoc, with Canon's hardened runtime and camera entitlement)"
+    local stage="/[^']*/eoswc-stage\\.[A-Za-z0-9]+"
+    assert_log_matches "^    codesign --force --sign - --identifier EWCService --options runtime --entitlements '$stage/entitlements\\.plist' '$RES/EOSWebcamService' &&$"
+    assert_log_matches "^    codesign --force --sign - --identifier EWCProxy --options runtime --entitlements '$stage/entitlements\\.plist' '$RES/EWCProxy' &&$"
+    assert_log_matches "^    codesign --force --sign - '$EOSWC_PLUGIN_DIR'$"
+    # They ran, helpers first, the bundle last, and nothing with --deep.
+    calls_only > "$SANDBOX/calls.txt"
+    local svc proxy bundle
+    svc="$(grep -n -- "--identifier EWCService --options runtime" "$SANDBOX/calls.txt" | head -1 | cut -d: -f1)"
+    proxy="$(grep -n -- "--identifier EWCProxy --options runtime" "$SANDBOX/calls.txt" | head -1 | cut -d: -f1)"
+    bundle="$(grep -nx -- "codesign --force --sign - $EOSWC_PLUGIN_DIR" "$SANDBOX/calls.txt" | tail -1 | cut -d: -f1)"
+    [ -n "$svc" ] && [ -n "$proxy" ] && [ -n "$bundle" ] && [ "$bundle" -gt "$svc" ] && [ "$bundle" -gt "$proxy" ] ||
+        fail "helpers not signed before the bundle (svc=$svc proxy=$proxy bundle=$bundle)"
+    assert_lacks "$SANDBOX/calls.txt" "--deep"
+    assert_signed_like_canon_ad_hoc
+    # The entitlements used are the dist file, which holds exactly Canon's
+    # entitlement plus the library-validation exception EDSDK needs.
+    /usr/bin/python3 -c '
+import plistlib, sys
+e = plistlib.load(open(sys.argv[1], "rb"))
+sys.exit(e != {"com.apple.security.device.camera": True, "com.apple.security.cs.disable-library-validation": True})
+' "$CLONE/dist/v1.4/fork-entitlements.plist" ||
+        fail "fork-entitlements.plist is not Canon's camera entitlement + disable-library-validation"
+}
+
+test_rerun_over_the_current_fork_does_not_re_sign() {
+    make_canon_install --patched
+    run_install; assert_status "$RC" 0
+    assert_contains "$OUT" "Already patched and signed by this version: not re-signing."
+    assert_contains "$OUT" "Already patched and signed: nothing changed"
+    calls_only > "$SANDBOX/calls.txt"
+    assert_lacks "$SANDBOX/calls.txt" "codesign --force"
+    assert_same "$RES/EWCProxy" "$SANDBOX/originals/Contents/Resources/EWCProxy"
+    holds_patched "$EOSWC_PLUGIN_DIR/Contents" || fail "plug-in changed"
+}
+
+# Over an install whose signature isn't this version's (runtime dropped):
+# nothing to patch, but it is re-signed.
+test_rerun_over_a_fork_without_the_runtime_re_signs() {
+    make_canon_install --patched --sig old-fork
+    run_install; assert_status "$RC" 0
+    assert_lacks "$OUT" "not re-signing"
+    assert_signed_like_canon_ad_hoc
+}
+
+# --- frame rate (M2) ---
+movz_imm() {  # FILE OFFSET -> "wN #imm" of the 32-bit movz there
+    /usr/bin/python3 -c '
+import struct, sys
+insn = struct.unpack_from("<I", open(sys.argv[1], "rb").read(), int(sys.argv[2], 0))[0]
+assert insn & 0x7f800000 == 0x52800000, hex(insn)
+print("w%d #%d" % (insn & 31, (insn >> 5) & 0xffff))' "$1" "$2"
+}
+
+# The fps apps are told is the DAL plug-in's mapping of the service's
+# StreamFps (config.plist): 30 -> FPS_30 -> mov w9,#30. All of it must say 30.
+assert_advertises_30fps() {
+    [ "$(plutil -extract StreamFps raw -o - "$RUNTIME/config.plist")" = 30 ] || fail "config StreamFps is not 30"
+    [ "$(plutil -extract PreviewFps raw -o - "$RUNTIME/config.plist")" = 30 ] || fail "config PreviewFps is not 30"
+    [ "$(plutil -extract StreamFps raw -o - "$RUNTIME/proconfig.plist")" = 30 ] || fail "proconfig StreamFps is not 30"
+    [ "$(movz_imm "$BIN/EOSWebcamUtility" 0x3130c)" = "w9 #30" ] || fail "the plug-in does not advertise 30 for FPS_30: $(movz_imm "$BIN/EOSWebcamUtility" 0x3130c)"
+    [ "$(movz_imm "$BIN/EOSWebcamUtility" 0x31310)" = "w10 #60" ] || fail "FPS_60 mapping changed"
+    [ "$(movz_imm "$RES/EWCProxy" 0x43810)" = "w8 #30" ] || fail "EWCProxy fps reset is not 30"
+    assert_contains "$OUT" "Config: 1920x1080 @ 30fps"
+    assert_contains "$OUT" "Resolution:     1920x1080 @ 30fps"
+    assert_lacks "$OUT" "60fps"
+}
+
+test_fps_config_output_and_advertised_rate_all_say_30() {
+    make_canon_install
+    run_install; assert_status "$RC" 0
+    assert_advertises_30fps
+}
+
+# v1.4.1/v1.4.2 made the plug-in advertise 60 (and EWCProxy hold 62) while
+# the config and the output said 30. Upgrading puts Canon's bytes back.
+test_upgrade_from_an_earlier_fork_version_fixes_the_fps_and_re_signs() {
+    make_canon_install --old-patched
+    [ "$(movz_imm "$BIN/EOSWebcamUtility" 0x3130c)" = "w9 #60" ] || fail "setup: old fixture should advertise 60"
+    run_install; assert_status "$RC" 0
+    assert_contains "$OUT" "Mode:          Update existing fork"
+    assert_contains "$OUT" "updated:         MacOS/EOSWebcamUtility (from an earlier fork version)"
+    assert_log_matches "--check-fork '$EOSWC_PLUGIN_DIR/Contents'"
+    holds_patched "$EOSWC_PLUGIN_DIR/Contents" || fail "plug-in not brought up to date"
+    assert_advertises_30fps
+    assert_signed_like_canon_ad_hoc
 }
 
 test_home_with_a_quote_in_it() {

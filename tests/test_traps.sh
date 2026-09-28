@@ -78,7 +78,7 @@ test_failed_install_reloads_canon_and_the_camera_manager() {
 
 test_install_cleanup_survives_a_closed_stdout() {
     fork_install
-    run_with_stdout_closed_after install.sh "[5/8]" --agree
+    run_with_stdout_closed_after install.sh "[4/7]" --agree
     [ "$RC" != 141 ] || fail "install was killed by SIGPIPE, so its EXIT trap never ran"
     [ "$RC" != 0 ] || fail "install claimed success"
     assert_both_reloaded_after_stop
@@ -103,7 +103,7 @@ test_term_during_the_install_admin_step_waits_for_it() {
     wait_detached
     assert_status "$RC" 143
     local signed reload
-    signed="$(last_line_re "^codesign --force --deep --sign - /")"
+    signed="$(last_line_re "^codesign --force --sign - /[^ ]*/EOSWebcamUtility\\.plugin$")"
     reload="$(first_line "launchctl load $CANON_PLIST")"
     [ -n "$signed" ] || fail "the admin step never finished (no final codesign)"
     [ -n "$reload" ] || fail "Canon's service was not reloaded"
@@ -121,7 +121,7 @@ test_the_install_admin_step_ignores_term() {
     run_install
     wait_detached
     holds_patched "$EOSWC_PLUGIN_DIR/Contents" || fail "the admin step was stopped part-way"
-    assert_log_matches "^codesign --force --deep --sign - /"
+    assert_log_matches "^codesign --force --sign - /[^ ]*/EOSWebcamUtility\\.plugin$"
 }
 
 test_term_during_the_uninstall_admin_step_waits_for_it() {
@@ -132,7 +132,7 @@ test_term_during_the_uninstall_admin_step_waits_for_it() {
     wait_detached
     assert_status "$RC" 143
     local signed reload
-    signed="$(last_line_re "^codesign --force --deep --sign - /")"
+    signed="$(last_line_re "^codesign --force --sign - /[^ ]*/EOSWebcamUtility\\.plugin$")"
     reload="$(first_line "launchctl load $CANON_PLIST")"
     [ -n "$signed" ] && [ -n "$reload" ] && [ "$reload" -gt "$signed" ] ||
         fail "Canon's service was reloaded (line ${reload:-none}) before the restore finished (line ${signed:-none})"
@@ -148,7 +148,7 @@ test_install_admin_step_survives_a_closed_stdout() {
     export STUB_ROOT_STDOUT_CLOSED=1
     run_install; assert_status "$RC" 0
     holds_patched "$EOSWC_PLUGIN_DIR/Contents" || fail "plug-in not patched"
-    assert_log_matches "^codesign --force --deep --sign - /"
+    assert_log_matches "^codesign --force --sign - /[^ ]*/EOSWebcamUtility\\.plugin$"
     assert_lacks "$OUT" "BrokenPipeError"
     # Root's own output, shown from its log once it's done.
     assert_contains "$OUT" "patched:         MacOS/EOSWebcamUtility"
@@ -161,7 +161,7 @@ test_install_admin_step_survives_closed_stdout_and_stderr() {
     export STUB_ROOT_STDOUT_CLOSED=both
     run_install; assert_status "$RC" 0
     holds_patched "$EOSWC_PLUGIN_DIR/Contents" || fail "plug-in not patched"
-    assert_log_matches "^codesign --force --deep --sign - /"
+    assert_log_matches "^codesign --force --sign - /[^ ]*/EOSWebcamUtility\\.plugin$"
     assert_contains "$OUT" "replacing existing signature"
 }
 
@@ -171,7 +171,7 @@ test_uninstall_admin_step_survives_closed_stdout_and_stderr() {
     export STUB_ROOT_STDOUT_CLOSED=both
     run_uninstall; assert_status "$RC" 0
     holds_originals "$EOSWC_PLUGIN_DIR/Contents" || fail "plug-in not restored"
-    assert_log_matches "^codesign --force --deep --sign - /"
+    assert_log_matches "^codesign --force --sign - /[^ ]*/EOSWebcamUtility\\.plugin$"
     assert_contains "$OUT" "replacing existing signature"
     assert_contains "$OUT" "Uninstall complete."
 }
@@ -189,14 +189,16 @@ test_failed_signing_rolls_back_to_the_originals() {
     assert_lacks "$OUT" "Installation complete!"
 }
 
-# The same over an already patched fork (no backup taken): root re-signs.
+# The same over an already patched fork (no backup taken; here an earlier
+# fork version, so there is something to patch and sign): root re-signs.
 test_failed_signing_over_the_fork_re_signs() {
-    fork_install
+    make_canon_install --old-patched
+    printf '<string>%s/eos-camera-manager.sh</string>\n' "$RUNTIME" > "$AGENT"
     export STUB_FAIL_CMD_ONCE=codesign
     run_install; assert_status "$RC" 1
     local failed resigned
     failed="$(first_line "codesign-failed")"
-    resigned="$(last_line_re "^codesign --force --deep --sign - /")"
+    resigned="$(last_line_re "^codesign --force --sign - /[^ ]*/EOSWebcamUtility\\.plugin$")"
     [ -n "$failed" ] && [ -n "$resigned" ] && [ "$resigned" -gt "$failed" ] ||
         fail "the plug-in was not re-signed after the failed step"
     assert_contains "$OUT" "re-signed"

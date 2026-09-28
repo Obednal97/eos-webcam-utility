@@ -31,6 +31,8 @@ set -e
 VERSION="1.4.2"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PATCHER="$SCRIPT_DIR/patch-binaries.py"
+# The entitlements the patched helpers are signed with (see that file).
+ENTITLEMENTS="$SCRIPT_DIR/fork-entitlements.plist"
 if [ ! -f "$SCRIPT_DIR/common.sh" ]; then
     echo "  ERROR: common.sh not found next to this script."
     exit 1
@@ -251,7 +253,7 @@ echo "============================================"
 echo ""
 
 # --- Pre-flight checks ---
-echo "[1/8] Pre-flight checks..."
+echo "[1/7] Pre-flight checks..."
 
 ARCH=$(uname -m)
 if [ "$ARCH" != "arm64" ]; then
@@ -267,6 +269,10 @@ NEED_TOOLS=""
 eoswc_require_tools $NEED_TOOLS || exit 1
 if [ ! -f "$PATCHER" ]; then
     echo "  ERROR: patch-binaries.py not found next to this script."
+    exit 1
+fi
+if [ ! -f "$ENTITLEMENTS" ]; then
+    echo "  ERROR: fork-entitlements.plist not found next to this script."
     exit 1
 fi
 
@@ -290,9 +296,10 @@ if [ -d "$PLUGIN_DIR" ]; then
     esac
     # Only these two states are safe to go on from: Canon's complete v1.3.16
     # originals (back them up, then patch) or the fork's fully patched
-    # binaries (nothing to back up or patch). Anything else (a different
+    # binaries, this version's or an earlier one's (nothing to back up; an
+    # earlier version's are brought up to date). Anything else (a different
     # build, a half-patched or truncated binary) could not be restored.
-    if python3 "$PATCHER" --check-patched "$PLUGIN_DIR/Contents" >/dev/null 2>&1; then
+    if python3 "$PATCHER" --check-fork "$PLUGIN_DIR/Contents" >/dev/null 2>&1; then
         INSTALL_TYPE="upgrade_fork"
     elif python3 "$PATCHER" --check-original "$PLUGIN_DIR/Contents" >/dev/null 2>&1; then
         INSTALL_TYPE="upgrade_original"
@@ -359,7 +366,7 @@ fi
 # --- Obtain Canon's original package (only if not already installed) ---
 NEED_INSTALLER=0
 PKG_FILE=""
-echo "[2/8] Obtaining Canon base software..."
+echo "[2/7] Obtaining Canon base software..."
 if [ "$SOURCE" = "installed" ]; then
     echo "  Using the EOS Webcam Utility already installed — no download needed."
 else
@@ -415,22 +422,17 @@ else
 fi
 echo ""
 
-# --- Acquire admin up front ---
-# Prompt now, before anything is torn down, so cancelling aborts cleanly.
-echo "[3/8] Requesting admin privileges (needed to install system files)..."
-osascript -e 'do shell script "true" with administrator privileges'
-echo ""
-
 # --- Back up existing user config (binaries are snapshotted below, as root) ---
-echo "[4/8] Creating backups..."
-# SNAPSHOT: new = copy Canon's originals into a new backup dir; reuse = an
-# existing backup already holds exactly the installed originals; none = the
+echo "[3/7] Creating backups..."
+# SNAPSHOT: new = copy Canon's plug-in into a new backup dir; reuse = an
+# existing backup already holds the installed originals; none = the
 # installed binaries are already patched, so there are no originals to copy
 # (and nothing below changes them). Each install run used to add another
 # ~11.5 MB backup, patched or not.
 SNAPSHOT=new
 [ "$INSTALL_TYPE" = upgrade_fork ] && SNAPSHOT=none
 EXISTING_BACKUP=""
+REUSE_HOW=""
 # Older installers ran the daemon out of the clone they were run from, which
 # may not be this one, and kept their backups there. The LaunchAgent says
 # which clone that was; read it now, before the backup search (the agent is
@@ -451,8 +453,24 @@ if [ "$SNAPSHOT" = new ] && [ "$INSTALL_TYPE" = upgrade_original ] && [ -n "$EXI
         if cmp -s "$PLUGIN_BIN/EOSWebcamUtility" "$EXISTING_BACKUP/EOSWebcamUtility" &&
            cmp -s "$PLUGIN_RES/EOSWebcamService" "$EXISTING_BACKUP/EOSWebcamService" &&
            cmp -s "$PLUGIN_RES/EWCProxy" "$EXISTING_BACKUP/EWCProxy"; then
-            SNAPSHOT=reuse
-        fi ;;
+            REUSE_HOW=identical
+        elif python3 "$PATCHER" --same-code "$EXISTING_BACKUP" "$PLUGIN_DIR/Contents" >/dev/null 2>&1; then
+            # Canon's original code, signed differently: older uninstallers
+            # re-signed the originals they put back. The backup is the better
+            # copy (it has Canon's signatures), so it isn't copied again.
+            REUSE_HOW=resigned
+        fi
+        # A backup from an older installer has only the three binaries. If
+        # the installed plug-in is Canon's own signed bundle, take a full
+        # backup this once instead, so uninstall can put Canon's signature
+        # back exactly; later installs reuse that one.
+        if [ -n "$REUSE_HOW" ] && [ ! -d "$EXISTING_BACKUP/$EOSWC_BUNDLE_BACKUP" ] &&
+           eoswc_canon_signed "$PLUGIN_DIR"; then
+            echo "  $EXISTING_BACKUP has only Canon's three binaries, but the installed"
+            echo "  plug-in is Canon's own signed bundle: backing up the whole bundle this once."
+            REUSE_HOW=""
+        fi
+        [ -z "$REUSE_HOW" ] || SNAPSHOT=reuse ;;
     esac
 fi
 if [ "$SNAPSHOT" = new ]; then
@@ -461,11 +479,17 @@ if [ "$SNAPSHOT" = new ]; then
     cp "$SUPPORT_DIR/config.plist" "$BACKUP_DIR/" 2>/dev/null || true
     cp "$SUPPORT_DIR/proconfig.plist" "$BACKUP_DIR/" 2>/dev/null || true
     echo "  Backup dir: $BACKUP_DIR"
-    echo "  (Canon's original binaries are copied here and verified before anything is patched.)"
+    echo "  (Canon's plug-in, with its signature, is copied here and verified before"
+    echo "  anything is patched.)"
 elif [ "$SNAPSHOT" = reuse ]; then
     BACKUP_DIR="$EXISTING_BACKUP"
     echo "  Canon's original binaries are already backed up in $BACKUP_DIR"
-    echo "  (it holds exactly the installed files; no new copy needed)."
+    if [ "$REUSE_HOW" = identical ]; then
+        echo "  (it holds exactly the installed files; no new copy needed)."
+    else
+        echo "  (the installed ones are the same code, re-signed by an earlier uninstall;"
+        echo "  the backup still has Canon's signatures, so no new copy is needed)."
+    fi
 else
     echo "  The installed binaries are already patched: no Canon originals to back up."
     case "$EXISTING_BACKUP" in
@@ -493,7 +517,7 @@ else
 fi
 
 # --- Stop services ---
-echo "[5/8] Stopping existing services..."
+echo "[4/7] Stopping existing services..."
 # OLD_DAEMON (read above) is where an older installer ran the daemon from;
 # that copy is cleaned up once the new one is in place.
 # From here on a closed stdout (e.g. `install.sh | head`) must not kill this
@@ -512,7 +536,9 @@ sleep 1
 echo "  Done"
 
 # --- Install (if needed), back up originals, patch, sign (single admin step) ---
-echo "[6/8] Installing Canon base (if needed), patching, and signing..."
+echo "[5/7] Installing Canon base (if needed), patching, and signing..."
+echo "  macOS asks for your admin password now (the only step that needs it). If you"
+echo "  cancel, nothing is changed and the services are started again."
 # The elevated shell osascript spawns inherits no TCC access to user folders
 # (~/Downloads, ~/Desktop, ~/Documents, iCloud Drive...), so reading the patcher
 # or the .pkg there fails with "Operation not permitted" even as root. Those are
@@ -521,6 +547,7 @@ echo "[6/8] Installing Canon base (if needed), patching, and signing..."
 # dir that macOS may purge.
 STAGE="$(mktemp -d -t eoswc-stage)"
 cp "$PATCHER" "$STAGE/patch-binaries.py"
+cp "$ENTITLEMENTS" "$STAGE/entitlements.plist"
 if [ "$NEED_INSTALLER" = 1 ]; then
     # -R: a .pkg is either a flat file or a bundle-style directory.
     cp -R "$PKG_FILE" "$STAGE/canon.pkg"
@@ -553,6 +580,11 @@ ROOT_SCRIPT="$STAGE/deploy.sh"
     # $HOME and the user name end up in root's command line.
     Q_PATCHER="$(eoswc_sq "$STAGE/patch-binaries.py")"
     Q_BACKUP="$(eoswc_sq "$BACKUP_DIR")"
+    Q_PLUGIN="$(eoswc_sq "$PLUGIN_DIR")"
+    Q_CONTENTS="$(eoswc_sq "$PLUGIN_DIR/Contents")"
+    Q_SVC="$(eoswc_sq "$PLUGIN_RES/EOSWebcamService")"
+    Q_PROXY="$(eoswc_sq "$PLUGIN_RES/EWCProxy")"
+    Q_BUNDLE_BACKUP="$(eoswc_sq "$BACKUP_DIR/$EOSWC_BUNDLE_BACKUP")"
     # Everything root prints goes to a log in staging, which this shell shows
     # afterwards, never down osascript's pipe: if osascript dies (Ctrl-C
     # reaches it too), that pipe closes, and the next write would kill the
@@ -560,16 +592,44 @@ ROOT_SCRIPT="$STAGE/deploy.sh"
     # signatures (seen in the VM: BrokenPipeError, then set -e).
     echo "exec > $(eoswc_sq "$STAGE/root.log") 2>&1"
     echo "echo \$\$ > $(eoswc_sq "$STAGE/root.pid")"
+    # How the fork signs the patched plug-in: ad hoc (it has no certificate),
+    # but keeping what Canon's signature had. Canon signs EOSWebcamService
+    # and EWCProxy with the hardened runtime and the camera entitlement, and
+    # the plug-in bundle without either. A plain `codesign --force --sign -`
+    # (what older versions did) drops all of that. Both helpers load Canon's
+    # EDSDK.framework, which under the hardened runtime needs library
+    # validation turned off for an ad hoc signature (see
+    # fork-entitlements.plist). The identifiers are Canon's (EOSWebcamService
+    # signs as EWCService). The bundle is signed last: its seal covers the
+    # helpers, which sit in Resources. No --deep: it signs nothing more here.
+    Q_ENTS="$(eoswc_sq "$STAGE/entitlements.plist")"
+    echo "sign_fork() {"
+    echo "    codesign --force --sign - --identifier EWCService --options runtime --entitlements $Q_ENTS $Q_SVC &&"
+    echo "    codesign --force --sign - --identifier EWCProxy --options runtime --entitlements $Q_ENTS $Q_PROXY &&"
+    echo "    codesign --force --sign - $Q_PLUGIN"
+    echo "}"
+    # True if helper binary \$1 is validly signed the way sign_fork signs it.
+    echo "sig_current() {"
+    echo "    codesign --verify --strict \"\$1\" >/dev/null 2>&1 &&"
+    echo "    codesign -dv \"\$1\" 2>&1 | grep -q 'flags=0x[0-9a-f]*([^)]*runtime' &&"
+    echo "    codesign -d --entitlements - \"\$1\" 2>&1 | grep -q 'com.apple.security.cs.disable-library-validation'"
+    echo "}"
     # If a step fails once patching has started, don't leave the plug-in
-    # half-patched or unsigned: with a verified backup, copy Canon's originals
-    # back (they carry Canon's own signatures); with none (the plug-in was
-    # already patched), re-sign what is there.
+    # half-patched or unsigned: with a verified backup, put Canon's plug-in
+    # back (the whole signed bundle if the backup has it, else the three
+    # binaries, which carry Canon's own signatures); with none (the plug-in
+    # was already patched), re-sign what is there.
     echo "PATCHING=0"
+    echo "PLUGIN_OWNER=\"\$(stat -f '%u:%g' $Q_PLUGIN 2>/dev/null)\" || PLUGIN_OWNER=''"
     echo "root_done() {"
     echo "    rc=\$?"
     echo "    set +e"
     echo "    if [ \"\$rc\" != 0 ] && [ \"\$PATCHING\" = 1 ]; then"
     if [ "$SNAPSHOT" != none ]; then
+        echo "        if [ -d $Q_BUNDLE_BACKUP ]; then"
+        echo "            ditto $Q_BUNDLE_BACKUP $Q_PLUGIN &&"
+        echo "                { [ -z \"\$PLUGIN_OWNER\" ] || chown -R \"\$PLUGIN_OWNER\" $Q_PLUGIN; }"
+        echo "        fi"
         ROLLED_BACK_TEST=""
         for f in MacOS/EOSWebcamUtility Resources/EOSWebcamService Resources/EWCProxy; do
             Q_B="$(eoswc_sq "$BACKUP_DIR/${f#*/}")"; Q_P="$(eoswc_sq "$PLUGIN_DIR/Contents/$f")"
@@ -583,10 +643,7 @@ ROOT_SCRIPT="$STAGE/deploy.sh"
         echo "            echo 'ERROR: a step failed after patching started, and rolling back from the backup failed too.'"
         echo "        fi"
     else
-        for f in "$PLUGIN_BIN/EOSWebcamUtility" "$PLUGIN_RES/EOSWebcamService" "$PLUGIN_RES/EWCProxy"; do
-            echo "        codesign --force --sign - $(eoswc_sq "$f")"
-        done
-        echo "        if codesign --force --deep --sign - $(eoswc_sq "$PLUGIN_DIR"); then"
+        echo "        if sign_fork; then"
         echo "            echo 'A step failed after patching started: re-signed the plug-in.'"
         echo "            : > $(eoswc_sq "$STAGE/re-signed")"
         echo "        fi"
@@ -613,6 +670,8 @@ ROOT_SCRIPT="$STAGE/deploy.sh"
             echo "  exit 1"
         fi
         echo "fi"
+        # Canon's installer just wrote the plug-in: its owner now.
+        echo "PLUGIN_OWNER=\"\$(stat -f '%u:%g' $Q_PLUGIN 2>/dev/null)\" || PLUGIN_OWNER=''"
     fi
     # If a check below fails because the staged patcher is gone, say so: this
     # shell's EXIT trap deletes staging, so an installer that stopped (e.g.
@@ -626,32 +685,46 @@ ROOT_SCRIPT="$STAGE/deploy.sh"
     RECORD_NODEV_OWNER="[ ! -e $(eoswc_sq "$PLUGIN_RES/errorNoDevice.jpg") ] || [ -s $Q_NODEV_OWNER ] || stat -f '%u:%g' $(eoswc_sq "$PLUGIN_RES/errorNoDevice.jpg") > $Q_NODEV_OWNER || true"
     case "$SNAPSHOT" in
     new)
-        # Back up the pristine originals and verify the backup before patching:
-        # never patch without a restorable copy of the three patched binaries.
-        for f in "$PLUGIN_BIN/EOSWebcamUtility" "$PLUGIN_RES/EOSWebcamService" "$PLUGIN_RES/EWCProxy"; do
-            echo "cp $(eoswc_sq "$f") $Q_BACKUP/ || { echo 'ERROR: could not back up $(basename "$f"); nothing was patched.' >&2; exit 1; }"
+        # Back up the whole signed plug-in (ditto keeps every byte, the
+        # _CodeSignature and Info.plist, modes and times) and verify it before
+        # patching: never patch without a restorable copy of Canon's plug-in.
+        # The flat copies older uninstallers read are hard links into it (no
+        # second ~11 MB), or plain copies where a link can't be made.
+        echo "ditto $Q_PLUGIN $Q_BUNDLE_BACKUP || { echo 'ERROR: could not back up the plug-in ($EOSWC_BUNDLE_BACKUP); nothing was patched.' >&2; exit 1; }"
+        for f in MacOS/EOSWebcamUtility Resources/EOSWebcamService Resources/EWCProxy; do
+            Q_SRC="$(eoswc_sq "$BACKUP_DIR/$EOSWC_BUNDLE_BACKUP/Contents/$f")"
+            echo "ln $Q_SRC $Q_BACKUP/ 2>/dev/null || cp $Q_SRC $Q_BACKUP/ || { echo 'ERROR: could not back up ${f#*/}; nothing was patched.' >&2; exit 1; }"
         done
         for f in EWCPairingService errorNoDevice.jpg errorBusy.jpg default.jpg; do
-            echo "[ ! -e $(eoswc_sq "$PLUGIN_RES/$f") ] || cp $(eoswc_sq "$PLUGIN_RES/$f") $Q_BACKUP/ 2>/dev/null || true"
+            Q_SRC="$(eoswc_sq "$BACKUP_DIR/$EOSWC_BUNDLE_BACKUP/Contents/Resources/$f")"
+            echo "[ ! -e $Q_SRC ] || ln $Q_SRC $Q_BACKUP/ 2>/dev/null || cp $Q_SRC $Q_BACKUP/ 2>/dev/null || true"
         done
+        echo "[ -z \"\$PLUGIN_OWNER\" ] || echo \"\$PLUGIN_OWNER\" > $(eoswc_sq "$BACKUP_DIR/plugin.owner")"
         echo "$RECORD_NODEV_OWNER"
         echo "chown -R $(eoswc_sq "$USERNAME") $Q_BACKUP 2>/dev/null || true"
-        echo "/usr/bin/python3 $Q_PATCHER --check-original $Q_BACKUP || { $STAGE_GONE_CHECK echo 'ERROR: the backup does not hold complete original Canon v1.3.16 binaries; nothing was patched.' >&2; exit 1; }" ;;
+        echo "/usr/bin/python3 $Q_PATCHER --check-original $Q_BACKUP || { $STAGE_GONE_CHECK echo 'ERROR: the backup does not hold complete original Canon v1.3.16 binaries; nothing was patched.' >&2; exit 1; }"
+        echo "/usr/bin/python3 $Q_PATCHER --same-code $Q_BACKUP $(eoswc_sq "$BACKUP_DIR/$EOSWC_BUNDLE_BACKUP/Contents") >/dev/null || { echo 'ERROR: the backed-up plug-in does not match the backed-up binaries; nothing was patched.' >&2; exit 1; }" ;;
     reuse)
-        # The existing backup must still hold exactly what is installed.
-        for f in "$PLUGIN_BIN/EOSWebcamUtility" "$PLUGIN_RES/EOSWebcamService" "$PLUGIN_RES/EWCProxy"; do
-            echo "cmp -s $(eoswc_sq "$f") $(eoswc_sq "$BACKUP_DIR/$(basename "$f")") || { echo 'ERROR: $(basename "$f") no longer matches the backup; nothing was patched. Re-run the installer.' >&2; exit 1; }"
-        done
+        # The existing backup must still hold what is installed: the same
+        # code (older uninstallers re-signed the originals they put back).
+        echo "/usr/bin/python3 $Q_PATCHER --same-code $Q_BACKUP $Q_CONTENTS || { $STAGE_GONE_CHECK echo 'ERROR: the installed binaries no longer match the backup; nothing was patched. Re-run the installer.' >&2; exit 1; }"
         echo "$RECORD_NODEV_OWNER"
         echo "chown $(eoswc_sq "$USERNAME") $(eoswc_sq "$BACKUP_DIR/errorNoDevice.owner") 2>/dev/null || true"
         echo "/usr/bin/python3 $Q_PATCHER --check-original $Q_BACKUP || { $STAGE_GONE_CHECK echo 'ERROR: the backup does not hold complete original Canon v1.3.16 binaries; nothing was patched.' >&2; exit 1; }" ;;
     none)
-        # No backup was taken, so only go on if there is nothing left to patch.
-        echo "/usr/bin/python3 $Q_PATCHER --check-patched $(eoswc_sq "$PLUGIN_DIR/Contents") || { $STAGE_GONE_CHECK echo 'ERROR: the plug-in is not fully patched and no backup was taken; nothing was patched. Re-run the installer.' >&2; exit 1; }" ;;
+        # No backup was taken, so only go on if the plug-in holds the fork's
+        # patched binaries (this or an earlier version: the patcher brings
+        # those up to date by putting Canon's bytes back where this version
+        # no longer patches).
+        echo "/usr/bin/python3 $Q_PATCHER --check-fork $Q_CONTENTS || { $STAGE_GONE_CHECK echo 'ERROR: the plug-in is not fully patched and no backup was taken; nothing was patched. Re-run the installer.' >&2; exit 1; }" ;;
     esac
+    # Nothing to patch and already signed the way sign_fork signs: leave the
+    # signatures alone (re-running the installer used to re-sign every time).
+    echo "WAS_CURRENT=0"
+    echo "/usr/bin/python3 $Q_PATCHER --check-patched $Q_CONTENTS >/dev/null 2>&1 && WAS_CURRENT=1"
     echo "PATCHING=1"
-    echo "/usr/bin/python3 $Q_PATCHER $(eoswc_sq "$PLUGIN_DIR/Contents")"
-    echo "chmod 755 $(eoswc_sq "$PLUGIN_BIN/EOSWebcamUtility") $(eoswc_sq "$PLUGIN_RES/EOSWebcamService") $(eoswc_sq "$PLUGIN_RES/EWCProxy")"
+    echo "/usr/bin/python3 $Q_PATCHER $Q_CONTENTS"
+    echo "chmod 755 $(eoswc_sq "$PLUGIN_BIN/EOSWebcamUtility") $Q_SVC $Q_PROXY"
     # Canon's loading-screen JPEGs. Older installers made all three
     # world-writable (666), so any process of any user could change what
     # every app shows. errorNoDevice.jpg is the only one the fork writes (the
@@ -666,10 +739,12 @@ ROOT_SCRIPT="$STAGE/deploy.sh"
     for f in errorBusy.jpg default.jpg; do
         echo "[ ! -e $(eoswc_sq "$PLUGIN_RES/$f") ] || chmod 644 $(eoswc_sq "$PLUGIN_RES/$f")"
     done
-    echo "codesign --force --sign - $(eoswc_sq "$PLUGIN_BIN/EOSWebcamUtility")"
-    echo "codesign --force --sign - $(eoswc_sq "$PLUGIN_RES/EOSWebcamService")"
-    echo "codesign --force --sign - $(eoswc_sq "$PLUGIN_RES/EWCProxy")"
-    echo "codesign --force --deep --sign - $(eoswc_sq "$PLUGIN_DIR")"
+    echo "if [ \"\$WAS_CURRENT\" = 1 ] && sig_current $Q_SVC && sig_current $Q_PROXY; then"
+    echo "    echo 'Already patched and signed by this version: not re-signing.'"
+    echo "    : > $(eoswc_sq "$STAGE/not-re-signed")"
+    echo "else"
+    echo "    sign_fork"
+    echo "fi"
 } > "$ROOT_SCRIPT"
 chmod 700 "$ROOT_SCRIPT"
 ROOT_OK=1
@@ -677,7 +752,7 @@ osascript -e "do shell script \"bash '$ROOT_SCRIPT'\" with administrator privile
 show_root_log
 if [ "$ROOT_OK" = 0 ]; then
     echo ""
-    echo "  ERROR: the admin step failed (see above)."
+    echo "  ERROR: the admin step failed or was cancelled (see above)."
     if [ -e "$STAGE/rolled-back" ]; then
         echo "  Canon's original binaries are safe in $BACKUP_DIR"
         echo "  (verified), and the half-done patch was rolled back: the plug-in holds"
@@ -698,12 +773,18 @@ if [ "$ROOT_OK" = 0 ]; then
 fi
 CAMEXT_PENDING=0
 [ -e "$STAGE/camext-not-approved" ] && CAMEXT_PENDING=1
+RESIGNED=1
+[ -e "$STAGE/not-re-signed" ] && RESIGNED=0
 rm -rf "$STAGE"
 STAGE=""
-echo "  Patched and signed"
+if [ "$RESIGNED" = 1 ]; then
+    echo "  Patched and signed (ad hoc, with Canon's hardened runtime and camera entitlement)"
+else
+    echo "  Already patched and signed: nothing changed"
+fi
 
 # --- Config ---
-echo "[7/8] Writing config, daemon, screens, and auto-start..."
+echo "[6/7] Writing config, daemon, screens, and auto-start..."
 mkdir -p "$SUPPORT_DIR"
 
 cat > "$SUPPORT_DIR/config.plist" << 'CFGEOF'
@@ -817,7 +898,7 @@ LAEOF
 echo "  Auto-start configured"
 
 # --- Start ---
-echo "[8/8] Starting services..."
+echo "[7/7] Starting services..."
 launchctl load "$LAUNCH_AGENT_SYS" 2>/dev/null || true
 sleep 1
 launchctl load "$LAUNCH_AGENTS/com.eos-camera-manager.plist" 2>/dev/null || true

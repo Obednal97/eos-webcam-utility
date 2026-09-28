@@ -121,6 +121,16 @@ On first run you'll be asked to accept a short disclaimer (no warranty; you're
 responsible for complying with Canon's licence). Pass `--agree` to accept it
 non-interactively.
 
+> **Cloned into Downloads, Desktop, Documents or iCloud Drive?** That's fine.
+> macOS privacy protection (TCC) stops the installer's admin step and the
+> background daemon from reading those folders. Older versions of the installer
+> could fail at step 6 with "Operation not permitted", leave an empty backup
+> or leave the daemon crash-looping. The installer now passes everything the
+> admin step needs through a temporary folder and installs the daemon to
+> `~/Library/Application Support/EWCService/`, so the clone can live anywhere.
+> Older installs that ran the daemon from the clone are moved over when you
+> re-run the installer.
+
 ### What the Installer Does
 
 1. Detects whether EOS Webcam Utility is already installed (fresh / original / previous fork)
@@ -128,7 +138,7 @@ non-interactively.
 3. Runs Canon's own installer if the base software isn't present, then snapshots the originals for uninstall
 4. Applies the fork's byte patches with `patch-binaries.py` (self-verifying: aborts on any non-v1.3.16 build) and re-signs
 5. Sets configuration to 1920x1080 @ 30fps
-6. Installs the camera manager daemon (auto-starts on login) and custom loading screens
+6. Installs the camera manager daemon (auto-starts on login), its custom loading screens and `generate-images.sh` into `~/Library/Application Support/EWCService/`. Backups stay in the clone under `backups/`
 7. Starts all services
 
 The patch step never changes anything unless the exact original bytes are
@@ -140,7 +150,17 @@ present, and it's idempotent, so re-running it is safe.
 bash dist/v1.4/uninstall.sh
 ```
 
-Restores original Canon files from the backup created during installation.
+Restores Canon's original files from the most recent backup that holds them
+(it skips empty backups and backups of already-patched binaries). If there is
+no usable backup it stops before changing anything. It then removes the camera
+manager's LaunchAgent and everything the installer put in
+`~/Library/Application Support/EWCService/`, including a `logo.png` you added
+there, but leaves Canon's own config files. Run it from the same clone you
+installed from, since that's where the backups are.
+
+If something isn't working, `bash dist/v1.4/diagnose.sh` writes a report to
+your Desktop. It shows where the daemon is installed and whether it is actually
+running.
 
 ---
 

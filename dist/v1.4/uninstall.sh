@@ -23,6 +23,7 @@ if [ ! -f "$SCRIPT_DIR/common.sh" ]; then
 fi
 # shellcheck source=common.sh
 . "$SCRIPT_DIR/common.sh"
+eoswc_refuse_root || exit 1
 # The real plug-in path, unless a test sandbox says otherwise (see common.sh).
 eoswc_select_plugin_dir || exit 1
 PLUGIN_DIR="$EOSWC_PLUGIN"

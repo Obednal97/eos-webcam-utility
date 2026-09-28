@@ -17,7 +17,7 @@
 #
 # Requirements:
 #   - macOS on Apple Silicon (M1/M2/M3/M4)
-#   - Admin privileges (will prompt)
+#   - Admin privileges (run WITHOUT sudo; you'll be prompted for your password)
 #   - Internet access (only if Canon's package needs to be downloaded)
 #
 # Usage: bash install.sh [--pkg PATH] [--agree]
@@ -34,6 +34,7 @@ if [ ! -f "$SCRIPT_DIR/common.sh" ]; then
 fi
 # shellcheck source=common.sh
 . "$SCRIPT_DIR/common.sh"
+eoswc_refuse_root || exit 1
 # The real plug-in path, unless a test sandbox says otherwise (see common.sh).
 eoswc_select_plugin_dir || exit 1
 PLUGIN_DIR="$EOSWC_PLUGIN"

@@ -97,6 +97,17 @@ eoswc_select_plugin_dir() {
     EOSWC_PLUGIN="$rplug"
 }
 
+# Refuse to run as root. The scripts ask for admin rights themselves, for one
+# step only; run under sudo, every file they write in your home (daemon,
+# LaunchAgent, backups) would be root's, and $HOME may not even be yours.
+eoswc_refuse_root() {
+    if [ "${EUID:-}" = 0 ] || [ "$(id -u 2>/dev/null)" = 0 ]; then
+        echo "ERROR: this must not run as root (EUID 0): run without sudo; you'll be"
+        echo "       prompted for your password. Nothing was changed."
+        return 1
+    fi
+}
+
 # True if launchd has a live process for the job. A label shows up in
 # `launchctl list` even while its job is failing to start (PID column "-"),
 # so mere presence is not enough. Columns: PID, last exit status, label.

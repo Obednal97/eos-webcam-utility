@@ -504,14 +504,25 @@ ROOT_SCRIPT="$STAGE/deploy.sh"
         echo "/usr/bin/python3 $Q_PATCHER --check-patched $(eoswc_sq "$PLUGIN_DIR/Contents") || { echo 'ERROR: the plug-in is not fully patched and no backup was taken; nothing was patched. Re-run the installer.' >&2; exit 1; }" ;;
     esac
     echo "/usr/bin/python3 $Q_PATCHER $(eoswc_sq "$PLUGIN_DIR/Contents")"
-    echo "chmod 755 '$PLUGIN_BIN/EOSWebcamUtility' '$PLUGIN_RES/EOSWebcamService' '$PLUGIN_RES/EWCProxy'"
-    echo "chmod 666 '$PLUGIN_RES/errorNoDevice.jpg' 2>/dev/null || true"
-    echo "chmod 666 '$PLUGIN_RES/errorBusy.jpg' 2>/dev/null || true"
-    echo "chmod 666 '$PLUGIN_RES/default.jpg' 2>/dev/null || true"
-    echo "codesign --force --sign - '$PLUGIN_BIN/EOSWebcamUtility'"
-    echo "codesign --force --sign - '$PLUGIN_RES/EOSWebcamService'"
-    echo "codesign --force --sign - '$PLUGIN_RES/EWCProxy'"
-    echo "codesign --force --deep --sign - '$PLUGIN_DIR'"
+    echo "chmod 755 $(eoswc_sq "$PLUGIN_BIN/EOSWebcamUtility") $(eoswc_sq "$PLUGIN_RES/EOSWebcamService") $(eoswc_sq "$PLUGIN_RES/EWCProxy")"
+    # Canon's loading-screen JPEGs. Older installers made all three
+    # world-writable (666), so any process of any user could change what
+    # every app shows. errorNoDevice.jpg is the only one the fork writes (the
+    # camera manager, running as you, swaps the loading screen into it), so it
+    # is yours, 644: writable by your own processes only, the same ones that
+    # can already change the daemon in ~/Library. The other two go back to
+    # Canon's 644; their owner is left as Canon shipped it.
+    Q_NODEV="$(eoswc_sq "$PLUGIN_RES/errorNoDevice.jpg")"
+    echo "[ -e $Q_NODEV ] || : > $Q_NODEV"
+    echo "chown $(eoswc_sq "$USERNAME:staff") $Q_NODEV"
+    echo "chmod 644 $Q_NODEV"
+    for f in errorBusy.jpg default.jpg; do
+        echo "[ ! -e $(eoswc_sq "$PLUGIN_RES/$f") ] || chmod 644 $(eoswc_sq "$PLUGIN_RES/$f")"
+    done
+    echo "codesign --force --sign - $(eoswc_sq "$PLUGIN_BIN/EOSWebcamUtility")"
+    echo "codesign --force --sign - $(eoswc_sq "$PLUGIN_RES/EOSWebcamService")"
+    echo "codesign --force --sign - $(eoswc_sq "$PLUGIN_RES/EWCProxy")"
+    echo "codesign --force --deep --sign - $(eoswc_sq "$PLUGIN_DIR")"
 } > "$ROOT_SCRIPT"
 chmod 700 "$ROOT_SCRIPT"
 if ! osascript -e "do shell script \"bash '$ROOT_SCRIPT'\" with administrator privileges"; then

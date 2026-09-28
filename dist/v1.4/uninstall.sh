@@ -143,6 +143,8 @@ RESTORE_SCRIPT="$STAGE/restore.sh"
         if cp "$BACKUP_DIR/$f" "$STAGE/$f" 2>/dev/null; then
             echo "cp $(eoswc_sq "$STAGE/$f") $(eoswc_sq "$PLUGIN_DIR/Contents/Resources/$f")"
         fi
+        # Older installers left these world-writable (666); cp keeps that.
+        echo "[ ! -e $(eoswc_sq "$PLUGIN_DIR/Contents/Resources/$f") ] || chmod 644 $(eoswc_sq "$PLUGIN_DIR/Contents/Resources/$f")"
     done
     for f in MacOS/EOSWebcamUtility Resources/EOSWebcamService Resources/EWCProxy; do
         echo "codesign --force --sign - $(eoswc_sq "$PLUGIN_DIR/Contents/$f")"

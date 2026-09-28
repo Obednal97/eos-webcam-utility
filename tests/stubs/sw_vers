@@ -1,3 +1,8 @@
 #!/bin/bash
-# Test stub.
-printf 'ProductName:\tmacOS\nProductVersion:\t26.0\nBuildVersion:\t00A000\n'
+# Test stub: macOS $STUB_SW_VERS (default 26.0).
+v="${STUB_SW_VERS:-26.0}"
+if [ "${1:-}" = "-productVersion" ]; then
+    echo "$v"
+    exit 0
+fi
+printf 'ProductName:\tmacOS\nProductVersion:\t%s\nBuildVersion:\t00A000\n' "$v"

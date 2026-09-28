@@ -68,7 +68,7 @@ eoswc_old_clone_dir() {
 }
 
 # Files a backup dir can hold; the first three are the ones that matter.
-EOSWC_BACKUP_FILES="EOSWebcamUtility EOSWebcamService EWCProxy EWCPairingService errorNoDevice.jpg errorBusy.jpg default.jpg config.plist proconfig.plist"
+EOSWC_BACKUP_FILES="EOSWebcamUtility EOSWebcamService EWCProxy EWCPairingService errorNoDevice.jpg errorNoDevice.owner errorBusy.jpg default.jpg config.plist proconfig.plist"
 
 # Copy backup dir $1 (outside Application Support, e.g. an old clone's
 # backups/) into EOSWC_BACKUP_ROOT under the same name, so it outlives that
@@ -134,6 +134,52 @@ eoswc_physical_path() {
     printf '%s%s\n' "${p%/}" "$rest"
 }
 
+# Print the test sandbox's physical path if EOSWC_TEST_SANDBOX is a dir the
+# test harness created and marked; fail otherwise.
+eoswc_marked_sandbox() {
+    local sandbox="${EOSWC_TEST_SANDBOX:-}" rsand=""
+    [ -n "$sandbox" ] || return 1
+    rsand="$(cd "$sandbox" 2>/dev/null && pwd -P)" || return 1
+    [ -n "$rsand" ] && [ "$rsand" != / ] && [ -f "$rsand/.eoswc-test-sandbox" ] &&
+        [ "$(cat "$rsand/.eoswc-test-sandbox" 2>/dev/null)" = "$rsand" ] || return 1
+    printf '%s\n' "$rsand"
+}
+
+# Refuse (loudly, exit status 1) if test-only hook $1 (a variable name) is set
+# outside a marked test sandbox. Never silently falls back to the real value.
+eoswc_require_sandbox_for() {
+    local name="$1" value
+    value="${!name:-}"
+    [ -n "$value" ] || return 0
+    eoswc_marked_sandbox >/dev/null && return 0
+    echo "ERROR: $name is set ($value), but it is a test-only hook" >&2
+    echo "       and this is not a test sandbox. Refusing to run. Unset it:" >&2
+    echo "         unset $name" >&2
+    return 1
+}
+
+# Print the path a test-only path hook stands for: $3 (the real path) unless
+# hook $1 (a variable name, value $2) is set, in which case it must be inside
+# a marked test sandbox and resolve inside it. Fails loudly otherwise.
+eoswc_sandboxed_path() {
+    local name="$1" value="$2" real="$3" rsand rpath
+    if [ -z "$value" ]; then
+        printf '%s\n' "$real"
+        return 0
+    fi
+    eoswc_require_sandbox_for "$name" || return 1
+    rsand="$(eoswc_marked_sandbox)" || return 1
+    rpath="$(eoswc_physical_path "$value")" || rpath=""
+    case "$rpath" in
+        "$rsand"/?*) ;;
+        *)
+            echo "ERROR: $name ($value) is outside the test sandbox" >&2
+            echo "       $rsand. Refusing to run." >&2
+            return 1 ;;
+    esac
+    printf '%s\n' "$rpath"
+}
+
 # Set EOSWC_PLUGIN to the plug-in path the scripts act on: always the real one,
 # except that tests/ may point EOSWC_PLUGIN_DIR at a fake plug-in. That hook is
 # honoured only inside a test sandbox: EOSWC_TEST_SANDBOX must be a dir the
@@ -141,28 +187,121 @@ eoswc_physical_path() {
 # it. Anything else is refused, loudly, rather than silently falling back:
 # uninstall.sh copies files into this path and code-signs it as root.
 eoswc_select_plugin_dir() {
-    local sandbox="${EOSWC_TEST_SANDBOX:-}" rsand="" rplug=""
     EOSWC_PLUGIN="$EOSWC_REAL_PLUGIN_DIR"
-    [ -n "${EOSWC_PLUGIN_DIR:-}" ] || return 0
-    if [ -n "$sandbox" ]; then
-        rsand="$(cd "$sandbox" 2>/dev/null && pwd -P)" || rsand=""
+    local p
+    p="$(eoswc_sandboxed_path EOSWC_PLUGIN_DIR "${EOSWC_PLUGIN_DIR:-}" "$EOSWC_REAL_PLUGIN_DIR")" || return 1
+    EOSWC_PLUGIN="$p"
+}
+
+# Canon's apps folder. Canon's v1.3.16 package puts "EOS Webcam Camera
+# Extension Installer.app" (the host app of Canon's Camera Extension) and
+# "EOS Webcam Utility Uninstaller.app" here. EOSWC_CANON_APP_DIR is a
+# test-only hook, guarded like EOSWC_PLUGIN_DIR.
+EOSWC_REAL_CANON_APP_DIR="/Applications/EOS Webcam Utility"
+eoswc_select_canon_app_dir() {
+    EOSWC_CANON_APPS="$EOSWC_REAL_CANON_APP_DIR"
+    local p
+    p="$(eoswc_sandboxed_path EOSWC_CANON_APP_DIR "${EOSWC_CANON_APP_DIR:-}" "$EOSWC_REAL_CANON_APP_DIR")" || return 1
+    EOSWC_CANON_APPS="$p"
+}
+
+# Canon's Camera Extension (a CMIOExtension system extension, signed by Canon,
+# team NC5A977249). On macOS 14+ Canon's postinstall asks the user to approve
+# it; once approved it shows up as a second "EOS Webcam Utility" camera. The
+# fork does not patch it.
+EOSWC_CAMEXT_ID="com.canon.cusa.eoswebcam.cameraExtension"
+EOSWC_CAMEXT_HOST="EOS Webcam Camera Extension Installer.app"
+EOSWC_CANON_UNINSTALLER="EOS Webcam Utility Uninstaller.app"
+
+# Print the Camera Extension's state as systemextensionsctl reports it, e.g.
+# "activated enabled" or "activated waiting for user"; "not registered" if it
+# isn't listed; "unknown" if systemextensionsctl can't be run. Read-only.
+eoswc_camera_extension_state() {
+    local out line state
+    command -v systemextensionsctl >/dev/null 2>&1 || { echo unknown; return 0; }
+    out="$(systemextensionsctl list 2>/dev/null)" || { echo unknown; return 0; }
+    line="$(printf '%s\n' "$out" | grep -m1 -F "$EOSWC_CAMEXT_ID")"
+    if [ -z "$line" ]; then
+        echo "not registered"
+        return 0
     fi
-    if [ -z "$rsand" ] || [ "$rsand" = / ] || [ ! -f "$rsand/.eoswc-test-sandbox" ] ||
-       [ "$(cat "$rsand/.eoswc-test-sandbox" 2>/dev/null)" != "$rsand" ]; then
-        echo "ERROR: EOSWC_PLUGIN_DIR is set ($EOSWC_PLUGIN_DIR), but it is a test-only hook" >&2
-        echo "       and this is not a test sandbox. Refusing to run. Unset it:" >&2
-        echo "         unset EOSWC_PLUGIN_DIR" >&2
+    state="$(printf '%s\n' "$line" | sed -n 's/.*\[\([^]]*\)\][[:space:]]*$/\1/p')"
+    echo "${state:-registered}"
+}
+
+# How to remove Canon's Camera Extension. Printed, never done for the user:
+# deactivating a system extension needs the user's own approval, and
+# `systemextensionsctl uninstall` only works with SIP disabled. Canon's
+# uninstaller is NOT a way to do it: a VM test showed it deletes the DAL
+# plug-in and ~/Library/Application Support/EOS-Webcam-Utility/temp but
+# leaves the extension active. macOS removes a system extension when its
+# host app is moved to the Trash in Finder. (No "X's " possessives:
+# diagnose.sh's name redaction would mangle them.)
+eoswc_camera_extension_removal_help() {
+    local apps="${EOSWC_CANON_APPS:-$EOSWC_REAL_CANON_APP_DIR}"
+    echo "$1To remove the Canon Camera Extension (the fork never does this for you):"
+    echo "$1  - Turn it off in System Settings > General >"
+    echo "$1    Login Items & Extensions > Camera Extensions."
+    echo "$1  - Or remove it with its host app: in Finder, move"
+    echo "$1    \"$apps/$EOSWC_CAMEXT_HOST\" to the Trash."
+    echo "$1  The EOS Webcam Utility Uninstaller does NOT remove it: it deletes"
+    echo "$1  the plug-in but leaves the extension active."
+    echo "$1  (\`systemextensionsctl uninstall\` needs SIP disabled; do not do that.)"
+}
+
+# If Canon's Camera Extension is still there (host app or registered),
+# print that and how to remove it. $1: a word for what just ran.
+eoswc_report_camera_extension() {
+    local apps="${EOSWC_CANON_APPS:-$EOSWC_REAL_CANON_APP_DIR}" state
+    state="$(eoswc_camera_extension_state)"
+    if [ -d "$apps/$EOSWC_CAMEXT_HOST" ] ||
+       { [ "$state" != "not registered" ] && [ "$state" != unknown ]; }; then
+        echo ""
+        echo "  Canon's Camera Extension is still installed ($state). It is part"
+        echo "  of Canon's software, which this $1 leaves in place; if approved"
+        echo "  it shows up as a second 'EOS Webcam Utility' camera."
+        eoswc_camera_extension_removal_help "  "
+    fi
+}
+
+# Refuse to run as root. The scripts ask for admin rights themselves, for one
+# step only; run under sudo, every file they write in your home (daemon,
+# LaunchAgent, backups) would be root's, and $HOME may not even be yours.
+eoswc_refuse_root() {
+    if [ "${EUID:-}" = 0 ] || [ "$(id -u 2>/dev/null)" = 0 ]; then
+        echo "ERROR: this must not run as root (EUID 0): run without sudo; you'll be"
+        echo "       prompted for your password. Nothing was changed."
         return 1
     fi
-    rplug="$(eoswc_physical_path "$EOSWC_PLUGIN_DIR")" || rplug=""
-    case "$rplug" in
-        "$rsand"/?*) ;;
-        *)
-            echo "ERROR: EOSWC_PLUGIN_DIR ($EOSWC_PLUGIN_DIR) is outside the test sandbox" >&2
-            echo "       $rsand. Refusing to run." >&2
-            return 1 ;;
-    esac
-    EOSWC_PLUGIN="$rplug"
+}
+
+# Check, before anything is stopped or changed, that every tool the scripts
+# need is there and that python3 really runs. On a Mac without the Command
+# Line Tools, /usr/bin/python3 is only a shim that pops up an install dialog
+# (and fails), so it is not even started unless xcode-select reports a
+# developer dir. The admin step runs /usr/bin/python3; this shell runs the
+# python3 on PATH; both must work. Extra tool names can be passed as args.
+eoswc_require_tools() {
+    local t missing=""
+    for t in osascript launchctl codesign plutil shasum ditto pkill xcode-select "$@"; do
+        command -v "$t" >/dev/null 2>&1 || missing="$missing $t"
+    done
+    if [ -n "$missing" ]; then
+        echo "  ERROR: required tool(s) not found:$missing"
+        echo "         Nothing was changed."
+        return 1
+    fi
+    if ! xcode-select -p >/dev/null 2>&1; then
+        echo "  ERROR: python3 needs Apple's Command Line Tools, which aren't installed."
+        echo "         Run 'xcode-select --install', then re-run this. Nothing was changed."
+        return 1
+    fi
+    if ! /usr/bin/python3 -c 'import sys; sys.exit(0)' >/dev/null 2>&1 ||
+       ! python3 -c 'import sys; sys.exit(0)' >/dev/null 2>&1; then
+        echo "  ERROR: python3 is installed but doesn't run. Run 'xcode-select --install'"
+        echo "         (or fix the python3 on your PATH), then re-run this. Nothing was changed."
+        return 1
+    fi
 }
 
 # True if launchd has a live process for the job. A label shows up in
@@ -192,4 +331,66 @@ eoswc_remove_legacy_runtime() {
             rm -f "$dir/$f" && echo "  Removed old $dir/$f"
         fi
     done
+}
+
+# Print one value from a plist (keypath like ProgramArguments.1), if it has it.
+eoswc_plist_value() {
+    plutil -extract "$2" raw -o - "$1" 2>/dev/null
+}
+
+# The fork's first camera manager ran as LaunchAgent com.canon-camera-manager,
+# from a canon-camera-manager.sh in the clone (work logs 007 and 008). It
+# fights the current daemon over restarting Canon's service, so install and
+# uninstall remove it, but only if it really is the fork's: that label, and a
+# program path ending in /canon-camera-manager.sh.
+EOSWC_LEGACY_LABEL="com.canon-camera-manager"
+EOSWC_LEGACY_PLIST="$HOME/Library/LaunchAgents/$EOSWC_LEGACY_LABEL.plist"
+
+# True if plist $1 is the fork's legacy camera manager agent. Prints the
+# program it runs.
+eoswc_legacy_agent_matches() {
+    local plist="$1" key arg
+    [ -f "$plist" ] || return 1
+    [ "$(eoswc_plist_value "$plist" Label)" = "$EOSWC_LEGACY_LABEL" ] || return 1
+    for key in Program ProgramArguments.0 ProgramArguments.1 ProgramArguments.2; do
+        arg="$(eoswc_plist_value "$plist" "$key")" || continue
+        case "$arg" in
+            /*/canon-camera-manager.sh)
+                printf '%s\n' "$arg"
+                return 0 ;;
+        esac
+    done
+    return 1
+}
+
+# Stop and remove the legacy agent (bootout first, then the plist) and the
+# launchd stdout/stderr logs it wrote to ~/Library/Logs. A plist with that
+# name that doesn't match is left alone, with a warning.
+eoswc_remove_legacy_agent() {
+    local plist="$EOSWC_LEGACY_PLIST" logs="$HOME/Library/Logs" f rest out="" err=""
+    [ -e "$plist" ] || return 0
+    if ! eoswc_legacy_agent_matches "$plist" >/dev/null; then
+        echo "  WARNING: left $plist alone: it doesn't run the fork's old"
+        echo "           canon-camera-manager.sh, so it isn't the fork's to remove."
+        return 0
+    fi
+    out="$(eoswc_plist_value "$plist" StandardOutPath)" || out=""
+    err="$(eoswc_plist_value "$plist" StandardErrorPath)" || err=""
+    launchctl bootout "gui/$(id -u)/$EOSWC_LEGACY_LABEL" 2>/dev/null || true
+    rm -f "$plist"
+    echo "  Removed the old camera manager LaunchAgent ($EOSWC_LEGACY_LABEL)"
+    for f in "$out" "$err" "$logs/canon-camera-manager-stdout.log" "$logs/canon-camera-manager-stderr.log"; do
+        # Only log files directly in ~/Library/Logs with the old daemon's name.
+        rest="${f#"$logs/"}"
+        [ "$rest" != "$f" ] || continue
+        case "$rest" in
+            */*) continue ;;
+            canon-camera-manager*.log) ;;
+            *) continue ;;
+        esac
+        if [ -f "$f" ] && [ ! -L "$f" ]; then
+            rm -f "$f" && echo "  Removed $f"
+        fi
+    done
+    return 0
 }

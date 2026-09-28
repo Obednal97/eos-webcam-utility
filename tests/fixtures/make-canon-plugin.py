@@ -7,10 +7,14 @@ and exactly the bytes the real patcher checks for, so the real patcher runs
 against them. Nothing here is Canon code.
 
 usage: make-canon-plugin.py PLUGIN_DIR [--patched] [--corrupt] [--truncated]
-  --patched    write the fork's patched bytes instead of the originals
-  --corrupt    put unexpected bytes in EOSWebcamService (patcher must abort)
-  --truncated  cut 16 bytes off the end of EWCProxy (after its last patch
-               offset, so only the Mach-O completeness check notices)
+                             [--version V] [--no-info-plist]
+  --patched        write the fork's patched bytes instead of the originals
+  --corrupt        put unexpected bytes in EOSWebcamService (patcher must abort)
+  --truncated      cut 16 bytes off the end of EWCProxy (after its last patch
+                   offset, so only the Mach-O completeness check notices)
+  --version V      CFBundleShortVersionString in Contents/Info.plist
+                   (default 1.3.16.0, what Canon's v1.3.16 package ships)
+  --no-info-plist  write no Contents/Info.plist
 """
 import importlib.util
 import os
@@ -21,6 +25,18 @@ sys.dont_write_bytecode = True  # importing the patcher must not litter dist/ wi
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PATCHER = os.path.join(HERE, "..", "..", "dist", "v1.4", "patch-binaries.py")
+
+
+INFO_PLIST = """<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleExecutable</key><string>EOSWebcamUtility</string>
+	<key>CFBundleIdentifier</key><string>EOSWebcamUtility</string>
+	<key>CFBundleShortVersionString</key><string>%s</string>
+</dict>
+</plist>
+"""
 
 
 def load_patches():
@@ -53,6 +69,9 @@ def main():
     patched = "--patched" in args
     corrupt = "--corrupt" in args
     truncated = "--truncated" in args
+    version = "1.3.16.0"
+    if "--version" in args:
+        version = args[args.index("--version") + 1]
     contents = os.path.join(plugin, "Contents")
     for rel, patches in load_patches().items():
         data = build(rel, patches, patched)
@@ -65,6 +84,9 @@ def main():
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "wb") as f:
             f.write(data)
+    if "--no-info-plist" not in args:
+        with open(os.path.join(contents, "Info.plist"), "w") as f:
+            f.write(INFO_PLIST % version)
     res = os.path.join(contents, "Resources")
     for name in ("EWCPairingService", "errorNoDevice.jpg", "errorBusy.jpg", "default.jpg"):
         with open(os.path.join(res, name), "wb") as f:

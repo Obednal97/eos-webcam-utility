@@ -19,5 +19,25 @@ case "${EOSWC_PLUGIN_DIR:?}" in
     *) echo "installer stub: plug-in dir outside sandbox" >&2; exit 2 ;;
 esac
 # STUB_INSTALLER_ARGS: extra fixture flags, e.g. --truncated for a bad payload.
-# shellcheck disable=SC2086
-/usr/bin/python3 "${FIXTURES:?}/make-canon-plugin.py" "$EOSWC_PLUGIN_DIR" ${STUB_INSTALLER_ARGS:-}
+# STUB_INSTALLER_NO_PAYLOAD: lay down no plug-in at all.
+if [ -z "${STUB_INSTALLER_NO_PAYLOAD:-}" ]; then
+    # shellcheck disable=SC2086
+    /usr/bin/python3 "${FIXTURES:?}/make-canon-plugin.py" "$EOSWC_PLUGIN_DIR" ${STUB_INSTALLER_ARGS:-}
+fi
+# Canon's package also installs its apps: the Camera Extension's host app
+# and Canon's uninstaller (STUB_INSTALLER_NO_APPS: don't).
+if [ -z "${STUB_INSTALLER_NO_APPS:-}" ]; then
+    case "${EOSWC_CANON_APP_DIR:?}" in
+        "${EOSWC_TEST_SANDBOX:?}"/*) ;;
+        *) echo "installer stub: app dir outside sandbox" >&2; exit 2 ;;
+    esac
+    mkdir -p "$EOSWC_CANON_APP_DIR/EOS Webcam Camera Extension Installer.app/Contents" \
+             "$EOSWC_CANON_APP_DIR/EOS Webcam Utility Uninstaller.app/Contents"
+fi
+# STUB_INSTALLER_EXIT: e.g. 1, as when Canon's postinstall exits 1 because
+# the Camera Extension wasn't approved (everything else is installed by then).
+rc="${STUB_INSTALLER_EXIT:-0}"
+if [ "$rc" != 0 ]; then
+    echo "installer: The install failed. (The Installer encountered an error that caused the installation to fail. An error occurred while running scripts from the package EOS_Webcam_Utility.pkg.)" >&2
+fi
+exit "$rc"

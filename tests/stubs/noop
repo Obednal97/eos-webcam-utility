@@ -1,5 +1,21 @@
 #!/bin/bash
 # Test stub: records the call and does nothing else. Symlinked under the
 # names of real commands that would otherwise touch the system.
+# STUB_SLOW_CMD=<name>: that command takes half a second (to widen races).
+[ "${STUB_SLOW_CMD:-}" = "$(basename "$0")" ] && /bin/sleep 0.5
+# STUB_FAIL_CMD_ONCE=<name>: the first call of that command fails (logged as
+# "<name>-failed"); later calls succeed.
+if [ "${STUB_FAIL_CMD_ONCE:-}" = "$(basename "$0")" ] &&
+   [ ! -e "${EOSWC_TEST_SANDBOX:?}/failed-once-$(basename "$0")" ]; then
+    : > "$EOSWC_TEST_SANDBOX/failed-once-$(basename "$0")"
+    echo "$(basename "$0")-failed $*" >> "${STUB_LOG:?STUB_LOG not set}"
+    echo "$(basename "$0"): simulated failure" >&2
+    exit 1
+fi
+# Like the real codesign, report re-signing on stderr (before the call is
+# logged, so a codesign that dies writing it isn't logged as done).
+if [ "$(basename "$0")" = codesign ] && [ "${1:-}" = --force ]; then
+    echo "${*: -1}: replacing existing signature" >&2
+fi
 echo "$(basename "$0") $*" >> "${STUB_LOG:?STUB_LOG not set}"
 exit 0

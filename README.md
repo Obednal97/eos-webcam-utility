@@ -85,7 +85,10 @@ The exact offsets and before/after bytes live in [`dist/v1.4/patch-binaries.py`]
 - **macOS** on Apple Silicon (M1, M2, M3, M4)
 - **Canon EOS camera** with USB connection
 - **USB cable** connecting your camera to your Mac
-- Admin privileges (the installer will prompt for your password)
+- Admin privileges. Run the scripts **without `sudo`**: they refuse to run as
+  root and ask for your password themselves, for the one step that needs it
+- Apple's Command Line Tools, for `python3` (`xcode-select --install`). The
+  installer checks that `python3` really runs before it changes anything
 - Internet access — only if Canon's base software isn't already installed (the installer downloads it from Canon)
 
 ### Tested With
@@ -116,6 +119,20 @@ The installer gets Canon's original binaries in this order of preference:
    ```bash
    bash dist/v1.4/install.sh --pkg /path/to/EOSWebcamUtility-MAC1.3.16.pkg.zip
    ```
+   macOS's installer runs that package as root, so it has to be Canon's exact
+   v1.3.16 package: the `.zip` or the `.pkg` inside it must match the pinned
+   SHA-256. Anything else is refused before the password prompt, even a
+   package Canon signed (Canon signs every build, and another build would
+   replace your Canon software before the patcher refused it). If you really
+   know where a package came from, `--allow-unverified-pkg` uses it anyway,
+   with a loud warning. `--pkg` is only used when Canon's software isn't
+   installed yet; if it is, the installer says so and patches the installed
+   copy.
+
+An existing install is only patched if it says it is v1.3.16
+(`CFBundleShortVersionString` 1.3.16.0) and its binaries verify as Canon's
+originals or the fork's patched ones. Any other version is refused and nothing
+is changed.
 
 On first run you'll be asked to accept a short disclaimer (no warranty; you're
 responsible for complying with Canon's licence). Pass `--agree` to accept it
@@ -132,12 +149,46 @@ non-interactively.
 > Older installs that ran the daemon from the clone are moved over when you
 > re-run the installer.
 
+### Canon's Camera Extension (macOS 14 and later)
+
+Canon's v1.3.16 package contains two ways to provide the "EOS Webcam Utility"
+camera: the DAL plug-in the fork patches, and a Camera Extension
+(`com.canon.cusa.eoswebcam.cameraExtension`, signed by Canon), installed with
+its host app "EOS Webcam Camera Extension Installer" in
+`/Applications/EOS Webcam Utility/`. On macOS 14 and later Canon's installer
+asks you to approve that extension, and reports an error if you don't.
+
+- **During a fresh install** a window may ask you to allow the extension.
+  Allow it or close the window; the install carries on either way. If you didn't approve it, Canon's installer reports an error.
+  The fork expects that one error and continues: by then the DAL plug-in is
+  installed, and the backup step still verifies it as Canon's v1.3.16. Any
+  other installer failure still stops the install before anything is patched.
+- **If the extension is approved** (then, or later in System Settings), apps
+  list **two cameras called "EOS Webcam Utility"**: the fork's patched DAL
+  plug-in and Canon's Camera Extension, which the fork doesn't patch or test.
+  Which of the two shows the fork's 1080p output hasn't been checked on a real
+  Mac yet; if you find out, please open an issue.
+- **Uninstall doesn't remove it, and neither does Canon's uninstaller.**
+  `uninstall.sh` restores Canon's software rather than removing it, and the
+  extension is part of that. It tells you if the extension is there. Canon's
+  own `EOS Webcam Utility Uninstaller` deletes the DAL plug-in (and
+  `~/Library/Application Support/EOS-Webcam-Utility/temp`) but, as a VM test
+  showed, leaves the extension active. To remove it, turn it off in System
+  Settings > General > Login Items & Extensions > Camera Extensions, or in
+  Finder move `/Applications/EOS Webcam Utility/EOS Webcam Camera Extension
+  Installer.app` (its host app) to the Trash, which makes macOS remove the
+  extension. The fork never removes it for you: that needs your approval, and
+  `systemextensionsctl uninstall` only works with SIP disabled.
+
+`diagnose.sh` reports whether the host app is installed and the extension's
+state (not registered, waiting for approval, or enabled).
+
 ### What the Installer Does
 
 1. Detects whether EOS Webcam Utility is already installed (fresh / original / previous fork)
 2. Obtains Canon's original binaries (installed / downloaded-and-checksummed / your `--pkg`)
 3. Runs Canon's own installer if the base software isn't present, then backs up Canon's original binaries for uninstall and verifies the backup (see [Backups](#backups)). If the backup can't be written or doesn't verify, it stops before patching anything
-4. Applies the fork's byte patches with `patch-binaries.py` (self-verifying: aborts on any non-v1.3.16 build) and re-signs
+4. Applies the fork's byte patches with `patch-binaries.py` (self-verifying: aborts on any non-v1.3.16 build) and re-signs. The loading-screen image the camera manager swaps (`errorNoDevice.jpg`) is made yours, mode 644; Canon's other two images go back to 644. Older installers made all three world-writable
 5. Sets configuration to 1920x1080 @ 30fps
 6. Installs the camera manager daemon (auto-starts on login), its custom loading screens and `generate-images.sh` into `~/Library/Application Support/EWCService/`
 7. Starts all services
@@ -164,6 +215,20 @@ restore it:
   `~/Library/Application Support/EWCService/`, including a `logo.png` you added
   there. Anything else Canon keeps in that folder is left alone
 - keeps the backups
+- leaves Canon's software installed, including its Camera Extension (see
+  [above](#canons-camera-extension-macos-14-and-later))
+
+Both the installer and the uninstaller also remove the fork's very first
+camera manager, the `com.canon-camera-manager` LaunchAgent (and its launchd
+logs in `~/Library/Logs`), if it's still there. They only remove it if it runs
+the fork's old `canon-camera-manager.sh`; anything else with that name is left
+alone with a warning.
+
+If the installer or uninstaller is interrupted after stopping the services
+(an error, a cancelled password prompt, Ctrl-C, a closed terminal), it restarts
+Canon's service and the camera manager on the way out. The admin step itself
+ignores Ctrl-C and always runs to the end; if the script is stopped while it
+is still running, it waits for it before restarting anything.
 
 If Canon's plug-in is already gone (Canon's own uninstaller deletes it but
 leaves the fork's camera manager running), there is nothing to restore: it
@@ -243,7 +308,7 @@ The logo is automatically scaled to fit (never stretched) and placed above the "
 - **~30fps maximum** — The camera's USB EVF outputs ~26 unique frames per second. This is a hardware/firmware limitation, not software. 60fps is only possible via HDMI output.
 - **1080p is upscaled** — The camera sends ~1024x576 natively over USB. The 1080p output is upscaled using DCT-domain scaling. True native 1080p requires HDMI output + capture card.
 - **Camera activation takes ~20-30 seconds** — Due to a race condition with macOS's `ptpcamerad` service. The daemon handles this automatically but it takes a few retry cycles.
-- **DAL plugin architecture is deprecated** — Apple deprecated CoreMediaIO DAL plugins at WWDC 2022. The plugin still works on current macOS but may break in future versions. A Camera Extension (CMIOExtension) migration is planned.
+- **DAL plugin architecture is deprecated** — Apple deprecated CoreMediaIO DAL plugins at WWDC 2022. The plugin still works on current macOS but may break in future versions. Canon's own v1.3.16 package already ships a signed Camera Extension (see [Canon's Camera Extension](#canons-camera-extension-macos-14-and-later)), but the fork doesn't patch it; moving the fork's changes to a Camera Extension is still open (work log 009).
 - **Apple Silicon only** — The patched binaries are ARM64. Intel Macs are not supported by this fork.
 
 ---

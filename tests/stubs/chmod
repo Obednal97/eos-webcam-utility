@@ -1,0 +1,5 @@
+#!/bin/bash
+# Test stub: records the call, then runs the real chmod (so modes can be
+# checked afterwards).
+echo "chmod $*" >> "${STUB_LOG:-/dev/null}"
+exec /bin/chmod "$@"

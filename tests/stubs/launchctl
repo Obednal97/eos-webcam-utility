@@ -1,7 +1,11 @@
 #!/bin/bash
 # Test stub: `launchctl list` prints $STUB_LAUNCHCTL_LIST (a file in real
-# launchctl's "PID Status Label" format); load/unload are only recorded.
+# launchctl's "PID Status Label" format); load/unload/bootout are only recorded.
 echo "launchctl $*" >> "${STUB_LOG:?STUB_LOG not set}"
+# bootout: also record which LaunchAgent plists still exist at that moment.
+if [ "${1:-}" = bootout ]; then
+    echo "launchctl-bootout-saw: $(ls "${HOME:?}/Library/LaunchAgents" 2>/dev/null | tr '\n' ' ')" >> "$STUB_LOG"
+fi
 if [ "$1" = list ]; then
     printf 'PID\tStatus\tLabel\n'
     if [ -n "${STUB_LAUNCHCTL_LIST:-}" ] && [ -f "$STUB_LAUNCHCTL_LIST" ]; then

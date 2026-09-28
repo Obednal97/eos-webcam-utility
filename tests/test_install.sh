@@ -60,9 +60,11 @@ test_patches_existing_install_from_protected_clone() {
 
 test_fresh_install_from_flat_pkg_in_protected_folder() {
     printf 'xar!fake flat package\n' > "$HOME/Downloads/Canon.pkg"
+    pin_test_pkg "$HOME/Downloads/Canon.pkg"
     ORIG="$SANDBOX/originals"; /usr/bin/python3 "$FIXTURES/make-canon-plugin.py" "$ORIG"
     run_install --pkg "$HOME/Downloads/Canon.pkg"; assert_status "$RC" 0
     assert_contains "$OUT" "Mode:          Fresh install"
+    assert_contains "$OUT" "Verified: SHA-256 matches Canon's v1.3.16 package."
     assert_log_matches "^installer -pkg /[^ ]*/eoswc-stage\.[A-Za-z0-9]+/canon\.pkg -target /"
     assert_contains "$STUB_LOG" "installer-kind flat"
     assert_backup_of_originals "$(latest_backup)"
@@ -74,7 +76,10 @@ test_fresh_install_from_bundle_pkg_in_protected_folder() {
     echo '<plist/>' > "$HOME/Downloads/Canon.pkg/Contents/Info.plist"
     echo 'payload' > "$HOME/Downloads/Canon.pkg/Contents/Archive.pax.gz"
     ORIG="$SANDBOX/originals"; /usr/bin/python3 "$FIXTURES/make-canon-plugin.py" "$ORIG"
-    run_install --pkg "$HOME/Downloads/Canon.pkg"; assert_status "$RC" 0
+    # A bundle-style package can't be checked against the pinned SHA-256, so
+    # it needs the override (see test_pkg_verification.sh).
+    run_install --pkg "$HOME/Downloads/Canon.pkg" --allow-unverified-pkg; assert_status "$RC" 0
+    assert_contains "$OUT" "WARNING: --allow-unverified-pkg"
     assert_log_matches "^installer -pkg /[^ ]*/eoswc-stage\.[A-Za-z0-9]+/canon\.pkg -target /"
     assert_contains "$STUB_LOG" "installer-kind bundle"
     assert_backup_of_originals "$(latest_backup)"
@@ -128,6 +133,7 @@ test_truncated_binary_is_refused_before_any_change() {
 fresh_install_with_payload() {
     export STUB_INSTALLER_ARGS="$1"
     printf 'xar!fake flat package\n' > "$HOME/Downloads/Canon.pkg"
+    pin_test_pkg "$HOME/Downloads/Canon.pkg"
     ORIG="$SANDBOX/originals"; /usr/bin/python3 "$FIXTURES/make-canon-plugin.py" "$ORIG" "$1"
     run_install --pkg "$HOME/Downloads/Canon.pkg"
 }
@@ -165,7 +171,11 @@ test_failed_patch_keeps_verified_originals_in_app_support() {
     chmod 444 "$RES/EOSWebcamService"
     run_install; assert_status "$RC" 1
     assert_contains "$OUT" "Permission denied"
-    assert_differs "$BIN/EOSWebcamUtility" "$ORIG/Contents/MacOS/EOSWebcamUtility"
+    # Root rolled the half-patched plug-in back from the verified backup
+    # instead of leaving EOSWebcamUtility patched with a broken signature.
+    assert_same "$BIN/EOSWebcamUtility" "$ORIG/Contents/MacOS/EOSWebcamUtility"
+    holds_originals "$EOSWC_PLUGIN_DIR/Contents" || fail "plug-in not rolled back to Canon's originals"
+    assert_contains "$OUT" "rolled back"
     # The originals were backed up and verified before patching; they survive
     # outside staging, and the failure says where they are.
     assert_backup_of_originals "$(latest_backup)"

@@ -1,0 +1,76 @@
+#!/bin/bash
+# Test stub for `osascript -e 'do shell script "..." with administrator
+# privileges'`. Runs the shell script as the current user (no elevation)
+# while simulating TCC: $TCC_PROTECTED (the sandbox's fake ~/Downloads) is
+# made unreadable for the duration, as it is for the real elevated shell.
+echo "osascript $*" >> "${STUB_LOG:?STUB_LOG not set}"
+[ "${1:-}" = "-e" ] || { echo "osascript stub: expected -e" >&2; exit 2; }
+script="$2"
+prefix='do shell script "'
+suffix='" with administrator privileges'
+case "$script" in
+    "$prefix"*"$suffix") ;;
+    *) echo "osascript stub: unexpected AppleScript: $script" >&2; exit 2 ;;
+esac
+body="${script#"$prefix"}"
+body="${body%"$suffix"}"
+[ "$body" = true ] && exit 0
+if [ -n "${STUB_OSASCRIPT_CANCEL:-}" ]; then
+    echo "execution error: User canceled. (-128)" >&2
+    exit 1
+fi
+# The scripts pass `bash '<script>'`: that script is what root would run.
+file=""
+case "$body" in
+    "bash '"*"'") file="${body#bash \'}"; file="${file%\'}" ;;
+esac
+# Last line of defence: root must never be asked to touch the real plug-in.
+# The fake one lives under the sandbox's own Library/, so drop those first.
+root_text="$body"
+[ -n "$file" ] && [ -f "$file" ] && root_text="$root_text
+$(cat "$file")"
+fake_library="${EOSWC_TEST_SANDBOX:?}/Library/"
+root_text="${root_text//"$fake_library"/<sandbox>/}"
+if printf '%s\n' "$root_text" | grep -qF '/Library/CoreMediaIO/'; then
+    echo "FORBIDDEN osascript on the real plug-in" >> "$STUB_LOG"
+    echo "osascript stub: root script names the real plug-in; refusing" >&2
+    exit 99
+fi
+# Only ever chmod inside the test sandbox.
+in_sandbox() {
+    case "$1" in
+        "${EOSWC_TEST_SANDBOX:?}"/*) ;;
+        *) echo "osascript stub: $2 outside sandbox: $1" >&2; exit 2 ;;
+    esac
+}
+protected="${TCC_PROTECTED:-}"
+readonly_dir="${STUB_ROOT_READONLY:-}"
+[ -z "$protected" ] || in_sandbox "$protected" TCC_PROTECTED
+[ -z "$readonly_dir" ] || in_sandbox "$readonly_dir" STUB_ROOT_READONLY
+restore_perms() {
+    [ -z "$protected" ] || chmod 755 "$protected"
+    [ -z "$readonly_dir" ] || [ ! -d "$readonly_dir" ] || find "$readonly_dir" -type d -exec chmod 755 {} +
+}
+trap restore_perms EXIT
+# TCC: the elevated shell cannot read the protected folder.
+[ -z "$protected" ] || chmod 000 "$protected"
+# STUB_ROOT_READONLY: a dir tree root cannot write to (simulates a failing
+# write, e.g. a full or read-only disk).
+[ -z "$readonly_dir" ] || [ ! -d "$readonly_dir" ] || find "$readonly_dir" -type d -exec chmod 555 {} +
+# STUB_ROOT_VANISH_STAGED: the staged patcher is gone by the time root runs,
+# as when the unprivileged side's EXIT trap deletes staging mid-step. Only
+# ever that one file, and only in an installer staging dir.
+if [ -n "${STUB_ROOT_VANISH_STAGED:-}" ] && [ -n "$file" ]; then
+    staged="$(dirname "$file")/patch-binaries.py"
+    case "$staged" in
+        /*/eoswc-stage.*/patch-binaries.py) rm -f "$staged" ;;
+        *) echo "osascript stub: unexpected staging path: $staged" >&2; exit 2 ;;
+    esac
+fi
+{
+    echo "--- root script ---"
+    echo "$body"
+    [ -n "$file" ] && [ -f "$file" ] && cat "$file"
+    echo "--- end root script ---"
+} >> "$STUB_LOG"
+bash -c "$body"

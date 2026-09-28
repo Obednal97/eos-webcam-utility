@@ -1,0 +1,5 @@
+#!/bin/bash
+# Test stub: records the call and does nothing else. Symlinked under the
+# names of real commands that would otherwise touch the system.
+echo "$(basename "$0") $*" >> "${STUB_LOG:?STUB_LOG not set}"
+exit 0

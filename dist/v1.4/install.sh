@@ -102,13 +102,37 @@ if [ "$ALLOW_UNVERIFIED_PKG" = 1 ] && [ -z "$USER_PKG" ]; then
 fi
 
 # --- Failure safety ---
-# If the install is interrupted after we've stopped the existing services,
-# restart Canon's service on exit so the machine isn't left without a camera.
+# If the install stops after we've stopped the existing services (an error, a
+# cancelled prompt, Ctrl-C, a closed terminal), restart Canon's service and
+# the camera manager on exit so the machine isn't left without a camera.
 SERVICES_STOPPED=0
 INSTALL_COMPLETE=0
 WORK=""
 STAGE=""
 BACKUP_DIR=""
+AGENT_PLIST="$LAUNCH_AGENTS/com.eos-camera-manager.plist"
+
+# The admin step writes $STAGE/root.pid when it starts and $STAGE/root.exit
+# when it ends. It ignores Ctrl-C and TERM, so once started it always runs to
+# the end; osascript itself may still die, though, returning here while root
+# is mid-patch. True while it is still running.
+root_step_running() {
+    local pid
+    [ -n "$STAGE" ] && [ -f "$STAGE/root.pid" ] && [ ! -f "$STAGE/root.exit" ] || return 1
+    pid="$(cat "$STAGE/root.pid" 2>/dev/null)" || return 1
+    [ -n "$pid" ] && ps -p "$pid" >/dev/null 2>&1
+}
+# Wait up to $1 seconds for the admin step to finish; false if it hasn't.
+wait_for_root_step() {
+    local deadline=$((SECONDS + $1))
+    while root_step_running && [ "$SECONDS" -lt "$deadline" ]; do
+        sleep 1
+    done
+    ! root_step_running
+}
+# echo that can't fail: stdout may be a closed pipe by now (`install.sh | head`).
+say() { printf '%s\n' "$@" 2>/dev/null || true; }
+
 # True if SHA-256 $1 is a pinned checksum of Canon's v1.3.16 package.
 pkg_sha_pinned() {
     [ -n "$1" ] || return 1
@@ -172,16 +196,36 @@ verify_user_pkg() {
 # the Canon .pkg, the root script): Canon's originals go straight from the
 # plug-in into BACKUP_DIR, so deleting staging can never lose them.
 cleanup() {
-    [ -n "$WORK" ] && rm -rf "$WORK" 2>/dev/null || true
-    [ -n "$STAGE" ] && rm -rf "$STAGE" 2>/dev/null || true
-    if [ "$INSTALL_COMPLETE" != 1 ] && [ "$SERVICES_STOPPED" = 1 ]; then
-        echo ""
-        echo "  Install did not finish — restarting Canon's service so your existing"
-        echo "  camera setup keeps working. Re-run the installer to try again."
-        launchctl load "$LAUNCH_AGENT_SYS" 2>/dev/null || true
+    local root_busy=0 reloaded=0
+    trap '' INT TERM HUP PIPE
+    set +e
+    # Never restart Canon's service under a patch still in progress.
+    wait_for_root_step 600 || root_busy=1
+    # Reload first, before anything is printed: printing can fail.
+    if [ "$INSTALL_COMPLETE" != 1 ] && [ "$SERVICES_STOPPED" = 1 ] && [ "$root_busy" = 0 ]; then
+        launchctl load "$LAUNCH_AGENT_SYS" 2>/dev/null
+        [ -f "$AGENT_PLIST" ] && launchctl load "$AGENT_PLIST" 2>/dev/null
+        reloaded=1
     fi
+    [ -n "$WORK" ] && rm -rf "$WORK" 2>/dev/null
+    [ -n "$STAGE" ] && [ "$root_busy" = 0 ] && rm -rf "$STAGE" 2>/dev/null
+    if [ "$reloaded" = 1 ]; then
+        say "" "  Install did not finish — restarting Canon's service and the camera manager" \
+            "  so your existing camera setup keeps working. Re-run the installer to try again."
+    fi
+    if [ "$root_busy" = 1 ]; then
+        say "" "  Install interrupted while the admin step was still running. Services were" \
+            "  left stopped so it isn't disturbed mid-patch. Wait a minute, then re-run" \
+            "  the installer (it checks what state the plug-in is in first)."
+    fi
+    return 0
 }
 trap cleanup EXIT
+# Leave through cleanup on Ctrl-C, TERM or a closed terminal. Bash runs these
+# only once the current foreground command (e.g. the admin step) returns.
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 
 echo ""
 echo "============================================"
@@ -415,12 +459,17 @@ fi
 echo "[5/8] Stopping existing services..."
 # Older installers ran the daemon out of the clone; note where, so that copy
 # can be cleaned up once the new one is in place.
-OLD_DAEMON="$(eoswc_agent_daemon_path "$LAUNCH_AGENTS/com.eos-camera-manager.plist")"
-launchctl unload "$LAUNCH_AGENTS/com.eos-camera-manager.plist" 2>/dev/null || true
+OLD_DAEMON="$(eoswc_agent_daemon_path "$AGENT_PLIST")"
+# From here on a closed stdout (e.g. `install.sh | head`) must not kill this
+# shell outright, which would skip cleanup and leave the services stopped: with
+# SIGPIPE ignored, a failed write is an ordinary error and set -e runs cleanup.
+trap '' PIPE
+# Set first: reloading a service that wasn't stopped yet is harmless.
+SERVICES_STOPPED=1
+launchctl unload "$AGENT_PLIST" 2>/dev/null || true
 launchctl unload "$LAUNCH_AGENT_SYS" 2>/dev/null || true
 pkill -9 EOSWebcamServic 2>/dev/null || true
 pkill -9 EWCProxy 2>/dev/null || true
-SERVICES_STOPPED=1
 # The fork's first camera manager, if it's still there, would fight this one.
 eoswc_remove_legacy_agent
 sleep 1
@@ -460,6 +509,13 @@ ROOT_SCRIPT="$STAGE/deploy.sh"
 {
     echo '#!/bin/bash'
     echo 'set -e'
+    # Once started, run to the end: Ctrl-C (sent to the whole terminal
+    # process group) or TERM must never stop the patcher half-way. root.pid
+    # and root.exit let this shell's cleanup see whether it is still running.
+    echo "trap '' INT TERM HUP"
+    echo "echo \$\$ > $(eoswc_sq "$STAGE/root.pid")"
+    echo "root_done() { echo \"\$?\" > $(eoswc_sq "$STAGE/root.exit"); }"
+    echo "trap root_done EXIT"
     # Every value interpolated into these lines is shell-quoted (eoswc_sq):
     # $HOME and the user name end up in root's command line.
     Q_PATCHER="$(eoswc_sq "$STAGE/patch-binaries.py")"

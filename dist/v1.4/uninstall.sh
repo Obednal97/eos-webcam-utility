@@ -29,6 +29,7 @@ eoswc_select_plugin_dir || exit 1
 PLUGIN_DIR="$EOSWC_PLUGIN"
 eoswc_select_canon_app_dir || exit 1
 CANON_APPS="$EOSWC_CANON_APPS"
+AGENT_PLIST="$LAUNCH_AGENTS/com.eos-camera-manager.plist"
 # Canon's config dir, which is also where install.sh puts the daemon.
 SUPPORT_DIR="$EOSWC_RUNTIME_DIR"
 BACKUP_ROOT="$EOSWC_BACKUP_ROOT"
@@ -82,36 +83,75 @@ fi
 echo "Restoring from backup: $BACKUP_DIR"
 echo ""
 
-# If the admin step is cancelled or fails, say what state the plug-in is in
-# and restart the services so the camera keeps working as far as it can.
+# If the uninstall stops after the services were stopped (an error, a
+# cancelled prompt, Ctrl-C, a closed terminal), restart them so the camera
+# keeps working as far as it can, then say what state the plug-in is in.
 SERVICES_STOPPED=0
 RESTORE_STARTED=0
 RESTORED=0
+UNINSTALL_COMPLETE=0
 STAGE=""
+# The admin step writes $STAGE/root.pid and $STAGE/root.exit (see install.sh).
+root_step_running() {
+    local pid
+    [ -n "$STAGE" ] && [ -f "$STAGE/root.pid" ] && [ ! -f "$STAGE/root.exit" ] || return 1
+    pid="$(cat "$STAGE/root.pid" 2>/dev/null)" || return 1
+    [ -n "$pid" ] && ps -p "$pid" >/dev/null 2>&1
+}
+wait_for_root_step() {
+    local deadline=$((SECONDS + $1))
+    while root_step_running && [ "$SECONDS" -lt "$deadline" ]; do
+        sleep 1
+    done
+    ! root_step_running
+}
+# echo that can't fail: stdout may be a closed pipe by now.
+say() { printf '%s\n' "$@" 2>/dev/null || true; }
 on_exit() {
-    [ -n "$STAGE" ] && rm -rf "$STAGE" 2>/dev/null
-    if [ "$SERVICES_STOPPED" = 1 ] && [ "$RESTORED" != 1 ]; then
-        echo ""
-        echo "  Uninstall did not finish — restarting services."
+    local root_busy=0 reloaded=0
+    trap '' INT TERM HUP PIPE
+    set +e
+    # Never restart the services under a restore still in progress.
+    wait_for_root_step 600 || root_busy=1
+    # Reload first, before anything is printed: printing can fail.
+    if [ "$SERVICES_STOPPED" = 1 ] && [ "$UNINSTALL_COMPLETE" != 1 ] && [ "$root_busy" = 0 ]; then
+        launchctl load "$LAUNCH_AGENT_SYS" 2>/dev/null
+        # The camera manager only if the fork's binaries may still be there.
+        [ "$RESTORED" != 1 ] && [ -f "$AGENT_PLIST" ] && launchctl load "$AGENT_PLIST" 2>/dev/null
+        reloaded=1
+    fi
+    [ -n "$STAGE" ] && [ "$root_busy" = 0 ] && rm -rf "$STAGE" 2>/dev/null
+    if [ "$root_busy" = 1 ]; then
+        say "" "  Uninstall interrupted while the admin step was still running. Services" \
+            "  were left stopped so it isn't disturbed mid-restore. Wait a minute, then" \
+            "  re-run the uninstaller. Your backup is untouched: $BACKUP_DIR"
+    elif [ "$reloaded" = 1 ] && [ "$RESTORED" = 1 ]; then
+        say "" "  Uninstall did not finish, but Canon's original binaries are back." \
+            "  Canon's service was restarted. Re-run the uninstaller to finish cleaning up."
+    elif [ "$reloaded" = 1 ]; then
+        say "" "  Uninstall did not finish — restarting services."
         if [ "$RESTORE_STARTED" != 1 ] ||
            python3 "$PATCHER" --check-patched "$PLUGIN_DIR/Contents" >/dev/null 2>&1; then
-            echo "  Nothing was restored: the fork is still installed and working."
-            echo "  Re-run the uninstaller to try again."
+            say "  Nothing was restored: the fork is still installed and working." \
+                "  Re-run the uninstaller to try again."
         elif python3 "$PATCHER" --check-original "$PLUGIN_DIR/Contents" >/dev/null 2>&1; then
-            echo "  Canon's original binaries were copied back, but a later step (signing)"
-            echo "  failed, so the camera may not work. Re-run the uninstaller."
+            say "  Canon's original binaries were copied back, but a later step (signing)" \
+                "  failed, so the camera may not work. Re-run the uninstaller."
         else
-            echo "  The restore stopped part-way: the plug-in now holds a mix of Canon's"
-            echo "  and the fork's binaries and the camera may not work. Re-run the"
-            echo "  uninstaller to finish, or reinstall Canon's v1.3.16 package."
+            say "  The restore stopped part-way: the plug-in now holds a mix of Canon's" \
+                "  and the fork's binaries and the camera may not work. Re-run the" \
+                "  uninstaller to finish, or reinstall Canon's v1.3.16 package."
         fi
-        echo "  Your backup is untouched: $BACKUP_DIR"
-        launchctl load "$LAUNCH_AGENT_SYS" 2>/dev/null || true
-        launchctl load "$LAUNCH_AGENTS/com.eos-camera-manager.plist" 2>/dev/null || true
+        say "  Your backup is untouched: $BACKUP_DIR"
     fi
     return 0
 }
 trap on_exit EXIT
+# Leave through on_exit on Ctrl-C, TERM or a closed terminal. Bash runs these
+# only once the current foreground command (e.g. the admin step) returns.
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 
 # The elevated shell osascript spawns has no TCC access to user folders
 # (~/Downloads, ~/Desktop, ~/Documents, iCloud Drive...), so it cannot read a
@@ -136,6 +176,11 @@ RESTORE_SCRIPT="$STAGE/restore.sh"
 {
     echo '#!/bin/bash'
     echo 'set -e'
+    # Once started, run to the end (see install.sh): never a half restore.
+    echo "trap '' INT TERM HUP"
+    echo "echo \$\$ > $(eoswc_sq "$STAGE/root.pid")"
+    echo "root_done() { echo \"\$?\" > $(eoswc_sq "$STAGE/root.exit"); }"
+    echo "trap root_done EXIT"
     for f in MacOS/EOSWebcamUtility Resources/EOSWebcamService Resources/EWCProxy; do
         echo "cp $(eoswc_sq "$STAGE/${f#*/}") $(eoswc_sq "$PLUGIN_DIR/Contents/$f")"
     done
@@ -155,9 +200,13 @@ chmod 700 "$RESTORE_SCRIPT"
 
 # Stop services
 echo "[1/4] Stopping services..."
-launchctl unload "$LAUNCH_AGENTS/com.eos-camera-manager.plist" 2>/dev/null || true
-launchctl unload "$LAUNCH_AGENT_SYS" 2>/dev/null || true
+# A closed stdout must not kill this shell outright (skipping on_exit): with
+# SIGPIPE ignored, a failed write is an ordinary error and set -e runs on_exit.
+trap '' PIPE
+# Set first: reloading a service that wasn't stopped yet is harmless.
 SERVICES_STOPPED=1
+launchctl unload "$AGENT_PLIST" 2>/dev/null || true
+launchctl unload "$LAUNCH_AGENT_SYS" 2>/dev/null || true
 sleep 1
 
 # Restore binaries
@@ -192,8 +241,8 @@ done
 
 # Remove daemon
 echo "[4/4] Removing camera manager..."
-OLD_DAEMON="$(eoswc_agent_daemon_path "$LAUNCH_AGENTS/com.eos-camera-manager.plist")"
-rm -f "$LAUNCH_AGENTS/com.eos-camera-manager.plist"
+OLD_DAEMON="$(eoswc_agent_daemon_path "$AGENT_PLIST")"
+rm -f "$AGENT_PLIST"
 # The fork's first camera manager (com.canon-camera-manager), if still there.
 eoswc_remove_legacy_agent
 # The daemon, its images and generate-images.sh live in Application Support
@@ -217,6 +266,7 @@ eoswc_remove_legacy_runtime "$INSTALL_DIR"
 
 # Restart original service
 launchctl load "$LAUNCH_AGENT_SYS" 2>/dev/null || true
+UNINSTALL_COMPLETE=1
 
 echo ""
 echo "============================================"

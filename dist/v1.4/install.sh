@@ -28,7 +28,7 @@
 
 set -e
 
-VERSION="1.4.1"
+VERSION="1.4.2"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PATCHER="$SCRIPT_DIR/patch-binaries.py"
 if [ ! -f "$SCRIPT_DIR/common.sh" ]; then

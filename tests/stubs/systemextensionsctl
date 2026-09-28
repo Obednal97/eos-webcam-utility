@@ -1,0 +1,18 @@
+#!/bin/bash
+# Test stub: `systemextensionsctl list` shows Canon's Camera Extension in
+# state $STUB_SYSEXT_STATE (e.g. "activated enabled"), or no extensions.
+# Anything else (uninstall, reset, developer) is forbidden.
+echo "systemextensionsctl $*" >> "${STUB_LOG:?STUB_LOG not set}"
+if [ "${1:-}" != list ]; then
+    echo "FORBIDDEN systemextensionsctl $*" >> "$STUB_LOG"
+    exit 99
+fi
+if [ -n "${STUB_SYSEXT_STATE:-}" ]; then
+    echo "1 extension(s)"
+    echo "--- com.apple.system_extension.cmio"
+    printf 'enabled\tactive\tteamID\tbundleID (version)\tname\t[state]\n'
+    printf '*\t*\tNC5A977249\tcom.canon.cusa.eoswebcam.cameraExtension (1.0/1)\tEWCCameraExtension\t[%s]\n' "$STUB_SYSEXT_STATE"
+else
+    echo "0 extension(s)"
+fi
+exit 0

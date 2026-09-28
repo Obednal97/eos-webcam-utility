@@ -15,6 +15,14 @@ esac
 body="${script#"$prefix"}"
 body="${body%"$suffix"}"
 [ "$body" = true ] && exit 0
+# STUB_OSASCRIPT_WAIT_FOR=file: don't start the root step until it exists
+# (e.g. until a test's stdout reader has gone away). Bounded.
+if [ -n "${STUB_OSASCRIPT_WAIT_FOR:-}" ]; then
+    for _ in $(seq 200); do
+        [ -e "$STUB_OSASCRIPT_WAIT_FOR" ] && break
+        /bin/sleep 0.05
+    done
+fi
 if [ -n "${STUB_OSASCRIPT_CANCEL:-}" ]; then
     echo "execution error: User canceled. (-128)" >&2
     exit 1
@@ -24,16 +32,19 @@ file=""
 case "$body" in
     "bash '"*"'") file="${body#bash \'}"; file="${file%\'}" ;;
 esac
-# Last line of defence: root must never be asked to touch the real plug-in.
-# The fake one lives under the sandbox's own Library/, so drop those first.
+# Last line of defence: root must never be asked to touch the real plug-in,
+# or Canon's real apps folder. The fake ones live in the sandbox (its own
+# Library/ and Applications/), so drop the sandbox's paths first.
 root_text="$body"
 [ -n "$file" ] && [ -f "$file" ] && root_text="$root_text
 $(cat "$file")"
 fake_library="${EOSWC_TEST_SANDBOX:?}/Library/"
+fake_apps="$EOSWC_TEST_SANDBOX/Applications/"
 root_text="${root_text//"$fake_library"/<sandbox>/}"
-if printf '%s\n' "$root_text" | grep -qF '/Library/CoreMediaIO/'; then
-    echo "FORBIDDEN osascript on the real plug-in" >> "$STUB_LOG"
-    echo "osascript stub: root script names the real plug-in; refusing" >&2
+root_text="${root_text//"$fake_apps"/<sandbox>/}"
+if printf '%s\n' "$root_text" | grep -qF -e '/Library/CoreMediaIO/' -e '/Applications/EOS Webcam Utility'; then
+    echo "FORBIDDEN osascript on the real plug-in or Canon's apps" >> "$STUB_LOG"
+    echo "osascript stub: root script names the real plug-in or Canon's apps; refusing" >&2
     exit 99
 fi
 # Only ever chmod inside the test sandbox.
@@ -63,4 +74,22 @@ trap restore_perms EXIT
     [ -n "$file" ] && [ -f "$file" ] && cat "$file"
     echo "--- end root script ---"
 } >> "$STUB_LOG"
+# STUB_OSASCRIPT_DETACH: osascript is killed (Ctrl-C, TERM) while root carries
+# on: start the root step in the background, wait until it has started
+# (root.pid in its staging dir), TERM the calling script and exit as a killed
+# osascript would. The background pid goes to $EOSWC_TEST_SANDBOX/detached.pid.
+if [ -n "${STUB_OSASCRIPT_DETACH:-}" ] && [ -n "$file" ]; then
+    stage="$(dirname "$file")"
+    bash -c "$body" > "$EOSWC_TEST_SANDBOX/detached.out" 2>&1 &
+    echo "$!" > "$EOSWC_TEST_SANDBOX/detached.pid"
+    for _ in $(seq 200); do
+        [ -f "$stage/root.pid" ] && break
+        /bin/sleep 0.02
+    done
+    # =group: Ctrl-C/TERM reaches the root step too (same process group).
+    [ "$STUB_OSASCRIPT_DETACH" != group ] || [ ! -f "$stage/root.pid" ] ||
+        kill -TERM "$(cat "$stage/root.pid")" 2>/dev/null || true
+    kill -TERM "$PPID"
+    exit 143
+fi
 bash -c "$body"

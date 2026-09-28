@@ -1,5 +1,7 @@
 #!/bin/bash
 # Test stub: records the call and does nothing else. Symlinked under the
 # names of real commands that would otherwise touch the system.
+# STUB_SLOW_CMD=<name>: that command takes half a second (to widen races).
+[ "${STUB_SLOW_CMD:-}" = "$(basename "$0")" ] && /bin/sleep 0.5
 echo "$(basename "$0") $*" >> "${STUB_LOG:?STUB_LOG not set}"
 exit 0

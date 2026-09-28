@@ -1,0 +1,15 @@
+#!/bin/bash
+# Test stub: `xcode-select -p` reports the Command Line Tools, or fails like
+# a Mac without them when $STUB_NO_CLT is set. Anything else (e.g. --install,
+# which pops up a dialog) must never be run.
+echo "xcode-select $*" >> "${STUB_LOG:?STUB_LOG not set}"
+if [ "${1:-}" = "-p" ]; then
+    if [ -n "${STUB_NO_CLT:-}" ]; then
+        echo "xcode-select: error: unable to get active developer directory" >&2
+        exit 2
+    fi
+    echo /Library/Developer/CommandLineTools
+    exit 0
+fi
+echo "FORBIDDEN xcode-select $*" >> "$STUB_LOG"
+exit 99

@@ -115,10 +115,16 @@ enter_sandbox() {
     export STUB_LOG="$SANDBOX/calls.log"
     export STUB_LAUNCHCTL_LIST="$SANDBOX/launchctl-list"
     export EOSWC_PLUGIN_DIR="$SANDBOX/Library/CoreMediaIO/Plug-Ins/DAL/EOSWebcamUtility.plugin"
+    # Canon's apps folder (Camera Extension host app, Canon's uninstaller).
+    export EOSWC_CANON_APP_DIR="$SANDBOX/Applications/EOS Webcam Utility"
     export TCC_PROTECTED="$HOME/Downloads"
     export FIXTURES
     export PATH="$STUBS_DIR:/usr/bin:/bin:/usr/sbin:/sbin"
-    unset STUB_OSASCRIPT_CANCEL STUB_ROOT_READONLY STUB_INSTALLER_ARGS
+    unset STUB_OSASCRIPT_CANCEL STUB_ROOT_READONLY STUB_INSTALLER_ARGS \
+          STUB_INSTALLER_EXIT STUB_INSTALLER_NO_APPS STUB_INSTALLER_NO_PAYLOAD \
+          STUB_OSASCRIPT_WAIT_FOR STUB_OSASCRIPT_DETACH STUB_SLOW_CMD \
+          STUB_EUID STUB_NO_CLT STUB_PKGUTIL_SIG STUB_SYSEXT_STATE STUB_SW_VERS \
+          EOSWC_TEST_PKG_SHA256
 
     mkdir -p "$HOME/Downloads" "$HOME/Desktop" "$HOME/Library/LaunchAgents" \
              "$HOME/Library/Logs" "$TMPDIR"
@@ -140,7 +146,8 @@ enter_sandbox() {
 
     # Refuse to run anything unless the stubs really shadow the real tools.
     local t
-    for t in osascript launchctl installer codesign pkill sudo curl; do
+    for t in osascript launchctl installer codesign pkill sudo curl \
+             pkgutil systemextensionsctl xcode-select id chown chmod; do
         [ "$(command -v "$t")" = "$STUBS_DIR/$t" ] ||
             die "$t is not stubbed (resolves to $(command -v "$t"))"
     done
@@ -181,6 +188,13 @@ require_sandbox_hook() {
         export EOSWC_TEST_SANDBOX="$SANDBOX" EOSWC_PLUGIN_DIR="$REAL_PLUGIN_PATH"
         ! eoswc_select_plugin_dir 2>/dev/null
     ) || die "$common does not refuse a plug-in dir outside the sandbox; refusing to run $script"
+}
+
+# Accept file $1 as Canon's package: install.sh honours EOSWC_TEST_PKG_SHA256
+# (one more pinned --pkg checksum) only inside a marked sandbox.
+pin_test_pkg() {
+    EOSWC_TEST_PKG_SHA256="$(shasum -a 256 "$1" | awk '{print $1}')"
+    export EOSWC_TEST_PKG_SHA256
 }
 
 # Run a script under test; its exit status lands in RC.

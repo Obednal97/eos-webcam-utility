@@ -1,0 +1,21 @@
+#!/bin/bash
+# Test stub for `pkgutil --check-signature PKG`: $STUB_PKGUTIL_SIG=canon
+# prints Canon's real signature report (as for Canon's v1.3.16 package);
+# otherwise the package is unsigned. Any other pkgutil use is forbidden.
+echo "pkgutil $*" >> "${STUB_LOG:?STUB_LOG not set}"
+if [ "${1:-}" != "--check-signature" ] || [ $# != 2 ]; then
+    echo "FORBIDDEN pkgutil $*" >> "$STUB_LOG"
+    exit 99
+fi
+echo "Package \"$(basename "$2")\":"
+if [ "${STUB_PKGUTIL_SIG:-}" = canon ]; then
+    echo "   Status: signed by a developer certificate issued by Apple for distribution"
+    echo "   Notarization: trusted by the Apple notary service"
+    echo "   Certificate Chain:"
+    echo "    1. Developer ID Installer: Canon U.S.A., Inc. (NC5A977249)"
+    echo "    2. Developer ID Certification Authority"
+    echo "    3. Apple Root CA"
+    exit 0
+fi
+echo "   Status: no signature"
+exit 1

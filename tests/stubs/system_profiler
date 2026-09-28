@@ -1,5 +1,17 @@
 #!/bin/bash
-# Test stub: no USB devices, and the virtual camera is visible.
+# Test stub: the virtual camera is visible (SPCameraDataType, or the file
+# $STUB_SP_CAMERAS). SPUSBDataType prints nothing, as on macOS 26, where it
+# no longer exists, unless $STUB_SP_USB is a fixture file; the same for
+# SPUSBHostDataType and $STUB_SP_USBHOST.
 echo "system_profiler $*" >> "${STUB_LOG:?STUB_LOG not set}"
-[ "${1:-}" = SPCameraDataType ] && printf 'Camera:\n\n    EOS Webcam Utility:\n\n      Model ID: x\n'
+case "${1:-}" in
+    SPCameraDataType)
+        if [ -n "${STUB_SP_CAMERAS:-}" ]; then
+            cat "$STUB_SP_CAMERAS"
+        else
+            printf 'Camera:\n\n    EOS Webcam Utility:\n\n      Model ID: x\n'
+        fi ;;
+    SPUSBDataType)     [ -z "${STUB_SP_USB:-}" ] || cat "$STUB_SP_USB" ;;
+    SPUSBHostDataType) [ -z "${STUB_SP_USBHOST:-}" ] || cat "$STUB_SP_USBHOST" ;;
+esac
 exit 0

@@ -125,7 +125,10 @@ enter_sandbox() {
           STUB_OSASCRIPT_WAIT_FOR STUB_OSASCRIPT_DETACH STUB_SLOW_CMD \
           STUB_EUID STUB_NO_CLT STUB_PKGUTIL_SIG STUB_SYSEXT_STATE STUB_SW_VERS \
           EOSWC_TEST_PKG_SHA256 STUB_ROOT_VANISH_STAGED STUB_ROOT_STDOUT_CLOSED \
-          STUB_FAIL_CMD_ONCE
+          STUB_FAIL_CMD_ONCE STUB_USERNAME STUB_FULLNAME STUB_COMPUTER_NAME \
+          STUB_LOCAL_HOST_NAME STUB_HOST_NAME STUB_HOSTNAME STUB_SERIAL \
+          STUB_HW_UUID STUB_IOREG_USB STUB_IOREG_FAIL STUB_SP_USB STUB_SP_USBHOST \
+          STUB_SP_CAMERAS STUB_LOG_OUTPUT STUB_AWK_REDACT
 
     mkdir -p "$HOME/Downloads" "$HOME/Desktop" "$HOME/Library/LaunchAgents" \
              "$HOME/Library/Logs" "$TMPDIR"
@@ -148,7 +151,8 @@ enter_sandbox() {
     # Refuse to run anything unless the stubs really shadow the real tools.
     local t
     for t in osascript launchctl installer codesign pkill sudo curl \
-             pkgutil systemextensionsctl xcode-select id chown chmod; do
+             pkgutil systemextensionsctl xcode-select id chown chmod \
+             log ioreg scutil hostname system_profiler awk; do
         [ "$(command -v "$t")" = "$STUBS_DIR/$t" ] ||
             die "$t is not stubbed (resolves to $(command -v "$t"))"
     done

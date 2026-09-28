@@ -1,0 +1,20 @@
+#!/bin/bash
+# Test stub: `scutil --get ComputerName|LocalHostName|HostName` prints
+# $STUB_COMPUTER_NAME / $STUB_LOCAL_HOST_NAME / $STUB_HOST_NAME (HostName is
+# not set by default, as on most Macs). Anything else is forbidden.
+echo "scutil $*" >> "${STUB_LOG:?STUB_LOG not set}"
+if [ "${1:-}" != --get ] || [ $# != 2 ]; then
+    echo "FORBIDDEN scutil $*" >> "$STUB_LOG"
+    exit 99
+fi
+case "$2" in
+    ComputerName)  v="${STUB_COMPUTER_NAME-Stubby’s MacBook Pro}" ;;
+    LocalHostName) v="${STUB_LOCAL_HOST_NAME-Stubbys-MacBook-Pro}" ;;
+    HostName)      v="${STUB_HOST_NAME:-}" ;;
+    *)             v="" ;;
+esac
+if [ -z "$v" ]; then
+    echo "$2: not set"
+    exit 1
+fi
+echo "$v"

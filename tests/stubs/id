@@ -1,8 +1,12 @@
 #!/bin/bash
 # Test stub: `id -u` reports $STUB_EUID when set (to exercise the root
-# refusal); everything else is the real id.
-if [ "${1:-}" = "-u" ] && [ $# = 1 ] && [ -n "${STUB_EUID:-}" ]; then
-    echo "$STUB_EUID"
-    exit 0
+# refusal), `id -un` $STUB_USERNAME and `id -F` $STUB_FULLNAME when set;
+# everything else is the real id.
+if [ $# = 1 ]; then
+    case "$1" in
+        -u)  [ -z "${STUB_EUID:-}" ] || { echo "$STUB_EUID"; exit 0; } ;;
+        -un) [ -z "${STUB_USERNAME:-}" ] || { echo "$STUB_USERNAME"; exit 0; } ;;
+        -F)  [ -z "${STUB_FULLNAME:-}" ] || { echo "$STUB_FULLNAME"; exit 0; } ;;
+    esac
 fi
 exec /usr/bin/id "$@"

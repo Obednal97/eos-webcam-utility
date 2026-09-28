@@ -1,0 +1,10 @@
+#!/bin/bash
+# Test stub: the host name is $STUB_HOSTNAME. Setting it is forbidden.
+echo "hostname $*" >> "${STUB_LOG:?STUB_LOG not set}"
+if [ $# != 0 ] && [ "$*" != -s ]; then
+    echo "FORBIDDEN hostname $*" >> "$STUB_LOG"
+    exit 99
+fi
+v="${STUB_HOSTNAME:-Stubbys-MacBook-Pro.local}"
+[ "$*" = -s ] && v="${v%%.*}"
+echo "$v"

@@ -96,6 +96,54 @@ else
     bad "a missing TMPDIR aborts the run (status $NX_STATUS): $NX_OUT"
 fi
 
+# run_script must refuse, before starting it, a script that could reach the
+# real plug-in: one without the sandbox guard, or whose common.sh guard does
+# not honour the sandbox or does not refuse paths outside it. Each fake script
+# only touches a canary, so a harness bug shows up as the canary existing.
+# expect_script_refused NAME PREP: PREP rewrites the clone's copy of the
+# scripts (in $V, inside the sandbox) after enter_sandbox.
+expect_script_refused() {
+    local name="$1" prep="$2" out status box
+    make_sandbox; box="$SANDBOX"
+    set +e
+    # shellcheck disable=SC2034  # V is used by the eval'd PREP
+    out="$( (enter_sandbox; V="$CLONE/dist/v1.4"; eval "$prep"; run_uninstall; echo "ran: RC=$RC") 2>&1 )"
+    status=$?
+    set -e
+    if [ "$status" = 3 ] && echo "$out" | grep -q "refusing to run" \
+       && [ ! -e "$box/home/RAN" ] && ! echo "$out" | grep -q '^ran:'; then
+        ok "refuses to run $name ($(echo "$out" | tail -1 | sed 's/^HARNESS ABORT: //; s|/[^ ]*/||g'))"
+    else
+        bad "refuses to run $name (status $status): $out"
+    fi
+    safe_rm_sandbox "$box"
+}
+# shellcheck disable=SC2016  # the PREP snippets expand inside expect_script_refused
+{
+expect_script_refused "a script that hard-codes the real plug-in path" '
+    printf "%s\n" "#!/bin/bash" "PLUGIN_DIR=/Library/CoreMediaIO/Plug-Ins/DAL/EOSWebcamUtility.plugin" "touch \"\$HOME/RAN\"" > "$V/uninstall.sh"'
+expect_script_refused "a script with the old unguarded EOSWC_PLUGIN_DIR default" '
+    printf "%s\n" "#!/bin/bash" "PLUGIN_DIR=\"\${EOSWC_PLUGIN_DIR:-/Library/CoreMediaIO/Plug-Ins/DAL/EOSWebcamUtility.plugin}\"" "touch \"\$HOME/RAN\"" > "$V/uninstall.sh"'
+expect_script_refused "a script with no plug-in hook at all" '
+    printf "%s\n" "#!/bin/bash" "touch \"\$HOME/RAN\"" > "$V/uninstall.sh"'
+expect_script_refused "a common.sh whose guard accepts paths outside the sandbox" '
+    printf "%s\n" "#!/bin/bash" ". \"\$(dirname \"\$0\")/common.sh\"" "eoswc_select_plugin_dir || exit 1" "touch \"\$HOME/RAN\"" > "$V/uninstall.sh"
+    printf "%s\n" "eoswc_select_plugin_dir() { EOSWC_PLUGIN=\"\${EOSWC_PLUGIN_DIR:-x}\"; }" >> "$V/common.sh"'
+expect_script_refused "a common.sh whose guard ignores the sandbox hook" '
+    printf "%s\n" "#!/bin/bash" ". \"\$(dirname \"\$0\")/common.sh\"" "eoswc_select_plugin_dir || exit 1" "touch \"\$HOME/RAN\"" > "$V/uninstall.sh"
+    printf "%s\n" "eoswc_select_plugin_dir() { EOSWC_PLUGIN=/Library/CoreMediaIO/Plug-Ins/DAL/EOSWebcamUtility.plugin; }" >> "$V/common.sh"'
+}
+
+# Every staging dir name the scripts use is one common_checks looks for.
+make_sandbox; STAGING_BOX="$SANDBOX"
+if (enter_sandbox; for n in eoswc-stage eoswc-restore eoswc-deploy eoswc; do mkdir "$TMPDIR/$n.probe"; done
+    [ "$(staging_dirs | grep -c '\.probe$')" = 4 ]); then
+    ok "staging_dirs sees eoswc-stage.*, eoswc-restore.*, eoswc-deploy.* and eoswc.*"
+else
+    bad "staging_dirs misses a staging dir pattern"
+fi
+safe_rm_sandbox "$STAGING_BOX"
+
 for d in "$UNLISTED" "$NOMARK" "$WRONG" "$OUTSIDE_LINK" "$CANARY_BOX" "$WORK"; do
     safe_rm_sandbox "$d"
 done

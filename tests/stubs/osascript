@@ -19,6 +19,23 @@ if [ -n "${STUB_OSASCRIPT_CANCEL:-}" ]; then
     echo "execution error: User canceled. (-128)" >&2
     exit 1
 fi
+# The scripts pass `bash '<script>'`: that script is what root would run.
+file=""
+case "$body" in
+    "bash '"*"'") file="${body#bash \'}"; file="${file%\'}" ;;
+esac
+# Last line of defence: root must never be asked to touch the real plug-in.
+# The fake one lives under the sandbox's own Library/, so drop those first.
+root_text="$body"
+[ -n "$file" ] && [ -f "$file" ] && root_text="$root_text
+$(cat "$file")"
+fake_library="${EOSWC_TEST_SANDBOX:?}/Library/"
+root_text="${root_text//"$fake_library"/<sandbox>/}"
+if printf '%s\n' "$root_text" | grep -qF '/Library/CoreMediaIO/'; then
+    echo "FORBIDDEN osascript on the real plug-in" >> "$STUB_LOG"
+    echo "osascript stub: root script names the real plug-in; refusing" >&2
+    exit 99
+fi
 protected="${TCC_PROTECTED:-}"
 if [ -n "$protected" ]; then
     # Only ever chmod inside the test sandbox.

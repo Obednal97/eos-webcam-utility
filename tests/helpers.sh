@@ -7,7 +7,11 @@
 # throwaway sandbox:
 #   - HOME is a fake home in the sandbox (so ~/Library is fake too)
 #   - the Canon plug-in is a FAKE one (EOSWC_PLUGIN_DIR) built by
-#     fixtures/make-canon-plugin.py and patched by the real patch-binaries.py
+#     fixtures/make-canon-plugin.py and patched by the real patch-binaries.py.
+#     The scripts honour EOSWC_PLUGIN_DIR only inside a marked sandbox
+#     (EOSWC_TEST_SANDBOX), and run_script refuses to run a script unless that
+#     guard is provably in place, so a script without it can never reach the
+#     real /Library plug-in
 #   - tests/stubs comes first on PATH: osascript, launchctl, installer,
 #     codesign, pkill, sleep, ... are stubs that record their calls; sudo and
 #     curl refuse to run
@@ -149,9 +153,40 @@ make_canon_install() {
     /usr/bin/python3 "$FIXTURES/make-canon-plugin.py" "$ORIG" "$@"
 }
 
+# Abort the run (before the script is started) unless the script under test
+# can only act on the sandbox's fake plug-in. It must take its plug-in path
+# from common.sh's eoswc_select_plugin_dir and never name the real path
+# itself; and that common.sh must honour a path inside the sandbox and refuse
+# the real one. A script without the guard (e.g. an older version) would run
+# against the real /Library plug-in, so it is never run at all.
+REAL_PLUGIN_PATH="/Library/CoreMediaIO/Plug-Ins/DAL/EOSWebcamUtility.plugin"
+require_sandbox_hook() {
+    local script="$1" common probe="$SANDBOX/hook-probe/EOSWebcamUtility.plugin"
+    common="$(dirname "$script")/common.sh"
+    [ -f "$script" ] || die "no such script: $script"
+    grep -qE '^[[:space:]]*eoswc_select_plugin_dir \|\| exit 1' "$script" ||
+        die "$script does not take its plug-in path from eoswc_select_plugin_dir; refusing to run it"
+    ! grep -qF '/Library/CoreMediaIO/' "$script" ||
+        die "$script names the real plug-in path itself; refusing to run it"
+    [ -f "$common" ] || die "$common not found; refusing to run $script"
+    # shellcheck disable=SC1090
+    (
+        . "$common"
+        export EOSWC_TEST_SANDBOX="$SANDBOX" EOSWC_PLUGIN_DIR="$probe"
+        eoswc_select_plugin_dir 2>/dev/null && [ "$EOSWC_PLUGIN" = "$probe" ]
+    ) || die "$common does not honour EOSWC_PLUGIN_DIR inside the sandbox; refusing to run $script"
+    # shellcheck disable=SC1090
+    (
+        . "$common"
+        export EOSWC_TEST_SANDBOX="$SANDBOX" EOSWC_PLUGIN_DIR="$REAL_PLUGIN_PATH"
+        ! eoswc_select_plugin_dir 2>/dev/null
+    ) || die "$common does not refuse a plug-in dir outside the sandbox; refusing to run $script"
+}
+
 # Run a script under test; its exit status lands in RC.
 RC=0
 run_script() {
+    require_sandbox_hook "$CLONE/$1"
     if (cd "$CLONE" && /bin/bash "$@") > "$OUT" 2>&1; then RC=0; else RC=$?; fi
 }
 run_install()   { run_script dist/v1.4/install.sh --agree "$@"; }
@@ -169,7 +204,7 @@ latest_backup() {
 
 staging_dirs() {
     find "$STAGE_ROOT" "$TMPDIR" -mindepth 1 -maxdepth 1 \
-        \( -name 'eoswc-stage.*' -o -name 'eoswc-restore.*' -o -name 'eoswc.*' \) 2>/dev/null | sort || true
+        \( -name 'eoswc-stage.*' -o -name 'eoswc-restore.*' -o -name 'eoswc-deploy.*' -o -name 'eoswc.*' \) 2>/dev/null | sort || true
 }
 
 # Checked after every test: no forbidden command ran, no staging dir left.

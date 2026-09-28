@@ -8,8 +8,6 @@
 
 set -e
 
-# EOSWC_PLUGIN_DIR exists only so tests/ can run against a fake plug-in; leave it unset.
-PLUGIN_DIR="${EOSWC_PLUGIN_DIR:-/Library/CoreMediaIO/Plug-Ins/DAL/EOSWebcamUtility.plugin}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 USER_HOME="$HOME"
 # Match install.sh: the clone this script was run from (repo root).
@@ -21,6 +19,9 @@ if [ ! -f "$SCRIPT_DIR/common.sh" ]; then
 fi
 # shellcheck source=common.sh
 . "$SCRIPT_DIR/common.sh"
+# The real plug-in path, unless a test sandbox says otherwise (see common.sh).
+eoswc_select_plugin_dir || exit 1
+PLUGIN_DIR="$EOSWC_PLUGIN"
 # Canon's config dir, which is also where install.sh puts the daemon.
 SUPPORT_DIR="$EOSWC_RUNTIME_DIR"
 LAUNCH_AGENT_SYS="/Library/LaunchAgents/com.canon.usa.EWCService.plist"

@@ -165,6 +165,11 @@ restore it:
   there. Anything else Canon keeps in that folder is left alone
 - keeps the backups
 
+If Canon's plug-in is already gone (Canon's own uninstaller deletes it but
+leaves the fork's camera manager running), there is nothing to restore: it
+stops and removes the camera manager, puts back Canon's config if a backup has
+it, keeps the backups, and starts nothing.
+
 ### Backups
 
 Before patching, the installer copies Canon's original `EOSWebcamUtility`,
@@ -183,12 +188,15 @@ That folder is used because the admin step can write there (macOS privacy
 protection doesn't cover it), macOS doesn't clear it the way it clears temp
 folders, and it doesn't depend on where the clone is, so you can move or delete
 the clone and still uninstall from a fresh one. Earlier installers kept
-backups in the clone under `backups/`. `uninstall.sh` still finds those if you
-run it from that clone, and checks them the same way.
+backups in the clone under `backups/`. Install and uninstall still find those,
+in the clone they're run from and in the clone the old install ran its daemon
+from (its LaunchAgent says which), and check them the same way.
 
 Re-running the installer over the fork takes no new backup, since the
 binaries are already patched. It reports the backup it found, or warns if
-there is none.
+there is none. If the only backup is one an earlier installer left in a
+clone, it copies it (verified) into the backups folder above, so it no longer
+depends on that clone; the original is left where it is.
 
 Uninstall keeps the backups. Once you're happy with the restore, you can
 delete them yourself:

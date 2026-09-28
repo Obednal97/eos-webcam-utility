@@ -415,13 +415,19 @@ echo "[4/8] Creating backups..."
 SNAPSHOT=new
 [ "$INSTALL_TYPE" = upgrade_fork ] && SNAPSHOT=none
 EXISTING_BACKUP=""
+# Older installers ran the daemon out of the clone they were run from, which
+# may not be this one, and kept their backups there. The LaunchAgent says
+# which clone that was; read it now, before the backup search (the agent is
+# rewritten below), so an upgrade from a fresh clone still finds them.
+OLD_DAEMON="$(eoswc_agent_daemon_path "$AGENT_PLIST")"
+OLD_CLONE="$(eoswc_old_clone_dir "$AGENT_PLIST")"
 # The newest backup that verifies as Canon's originals, in any location.
 while IFS= read -r d; do
     if python3 "$PATCHER" --check-original "$d" >/dev/null 2>&1; then
         EXISTING_BACKUP="$d"
         break
     fi
-done < <(eoswc_backup_candidates "$INSTALL_DIR")
+done < <(eoswc_backup_candidates "$INSTALL_DIR" "$OLD_CLONE")
 if [ "$SNAPSHOT" = new ] && [ "$INSTALL_TYPE" = upgrade_original ] && [ -n "$EXISTING_BACKUP" ]; then
     # Reusable only from Application Support: root can't read an older
     # backup left in a privacy-protected clone, and must re-check it.
@@ -446,6 +452,21 @@ elif [ "$SNAPSHOT" = reuse ]; then
     echo "  (it holds exactly the installed files; no new copy needed)."
 else
     echo "  The installed binaries are already patched: no Canon originals to back up."
+    case "$EXISTING_BACKUP" in
+    ""|"$BACKUP_ROOT"/*) ;;
+    *)
+        # It is the only copy of Canon's originals, and it sits in a clone that
+        # may be moved or deleted. Keep a verified copy in Application Support
+        # (the original is left exactly where it is).
+        echo "  Found a backup of Canon's originals left by an older installer: $EXISTING_BACKUP"
+        if ADOPTED="$(eoswc_adopt_backup "$EXISTING_BACKUP" "$PATCHER")"; then
+            echo "  Copied it (verified) to $ADOPTED, so it no longer depends on that clone."
+            EXISTING_BACKUP="$ADOPTED"
+        else
+            echo "  WARNING: could not copy it to $BACKUP_ROOT/. It is still used from"
+            echo "           where it is: don't delete that clone before uninstalling."
+        fi ;;
+    esac
     if [ -n "$EXISTING_BACKUP" ]; then
         echo "  Existing backup of Canon's originals: $EXISTING_BACKUP"
     else
@@ -457,9 +478,8 @@ fi
 
 # --- Stop services ---
 echo "[5/8] Stopping existing services..."
-# Older installers ran the daemon out of the clone; note where, so that copy
-# can be cleaned up once the new one is in place.
-OLD_DAEMON="$(eoswc_agent_daemon_path "$AGENT_PLIST")"
+# OLD_DAEMON (read above) is where an older installer ran the daemon from;
+# that copy is cleaned up once the new one is in place.
 # From here on a closed stdout (e.g. `install.sh | head`) must not kill this
 # shell outright, which would skip cleanup and leave the services stopped: with
 # SIGPIPE ignored, a failed write is an ordinary error and set -e runs cleanup.
@@ -539,6 +559,10 @@ ROOT_SCRIPT="$STAGE/deploy.sh"
         fi
         echo "fi"
     fi
+    # If a check below fails because the staged patcher is gone, say so: this
+    # shell's EXIT trap deletes staging, so an installer that stopped (e.g.
+    # killed) while root ran leaves root without it. That is not a bad backup.
+    STAGE_GONE_CHECK="[ -f $Q_PATCHER ] || { echo 'ERROR: the installer staging folder disappeared while the admin step was running (the installer was stopped part-way), so the check could not run; nothing was patched. Re-run the installer.' >&2; exit 1; };"
     case "$SNAPSHOT" in
     new)
         # Back up the pristine originals and verify the backup before patching:
@@ -550,16 +574,16 @@ ROOT_SCRIPT="$STAGE/deploy.sh"
             echo "[ ! -e $(eoswc_sq "$PLUGIN_RES/$f") ] || cp $(eoswc_sq "$PLUGIN_RES/$f") $Q_BACKUP/ 2>/dev/null || true"
         done
         echo "chown -R $(eoswc_sq "$USERNAME") $Q_BACKUP 2>/dev/null || true"
-        echo "/usr/bin/python3 $Q_PATCHER --check-original $Q_BACKUP || { echo 'ERROR: the backup does not hold complete original Canon v1.3.16 binaries; nothing was patched.' >&2; exit 1; }" ;;
+        echo "/usr/bin/python3 $Q_PATCHER --check-original $Q_BACKUP || { $STAGE_GONE_CHECK echo 'ERROR: the backup does not hold complete original Canon v1.3.16 binaries; nothing was patched.' >&2; exit 1; }" ;;
     reuse)
         # The existing backup must still hold exactly what is installed.
         for f in "$PLUGIN_BIN/EOSWebcamUtility" "$PLUGIN_RES/EOSWebcamService" "$PLUGIN_RES/EWCProxy"; do
             echo "cmp -s $(eoswc_sq "$f") $(eoswc_sq "$BACKUP_DIR/$(basename "$f")") || { echo 'ERROR: $(basename "$f") no longer matches the backup; nothing was patched. Re-run the installer.' >&2; exit 1; }"
         done
-        echo "/usr/bin/python3 $Q_PATCHER --check-original $Q_BACKUP || { echo 'ERROR: the backup does not hold complete original Canon v1.3.16 binaries; nothing was patched.' >&2; exit 1; }" ;;
+        echo "/usr/bin/python3 $Q_PATCHER --check-original $Q_BACKUP || { $STAGE_GONE_CHECK echo 'ERROR: the backup does not hold complete original Canon v1.3.16 binaries; nothing was patched.' >&2; exit 1; }" ;;
     none)
         # No backup was taken, so only go on if there is nothing left to patch.
-        echo "/usr/bin/python3 $Q_PATCHER --check-patched $(eoswc_sq "$PLUGIN_DIR/Contents") || { echo 'ERROR: the plug-in is not fully patched and no backup was taken; nothing was patched. Re-run the installer.' >&2; exit 1; }" ;;
+        echo "/usr/bin/python3 $Q_PATCHER --check-patched $(eoswc_sq "$PLUGIN_DIR/Contents") || { $STAGE_GONE_CHECK echo 'ERROR: the plug-in is not fully patched and no backup was taken; nothing was patched. Re-run the installer.' >&2; exit 1; }" ;;
     esac
     echo "/usr/bin/python3 $Q_PATCHER $(eoswc_sq "$PLUGIN_DIR/Contents")"
     echo "chmod 755 $(eoswc_sq "$PLUGIN_BIN/EOSWebcamUtility") $(eoswc_sq "$PLUGIN_RES/EOSWebcamService") $(eoswc_sq "$PLUGIN_RES/EWCProxy")"

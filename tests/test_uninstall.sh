@@ -259,6 +259,79 @@ test_failed_restore_is_reported_as_failure() {
     assert_contains "$STUB_LOG" "launchctl load $AGENT"
 }
 
+# VM scenario 6b, uninstall side: v1.4.1 is still installed from another
+# clone (X), with its backups in X/backups; uninstall runs from this clone.
+test_restores_from_the_clone_the_launchagent_runs_the_daemon_from() {
+    make_fork_install
+    local other="$HOME/Desktop/old-clone" good
+    good="$other/backups/pre-v1.4.1-20260920-100000"
+    mkdir -p "$good"
+    /usr/bin/python3 "$FIXTURES/make-canon-plugin.py" "$SANDBOX/canon"
+    cp "$SANDBOX/canon/Contents/MacOS/EOSWebcamUtility" "$SANDBOX/canon/Contents/Resources/EOSWebcamService" \
+       "$SANDBOX/canon/Contents/Resources/EWCProxy" "$good/"
+    echo old > "$other/eos-camera-manager.sh"
+    printf '<string>%s/eos-camera-manager.sh</string>\n' "$other" > "$AGENT"
+    run_uninstall; assert_status "$RC" 0
+    assert_contains "$OUT" "Restoring from backup: $good"
+    holds_originals "$EOSWC_PLUGIN_DIR/Contents" || fail "plug-in not restored"
+    assert_no_file "$other/eos-camera-manager.sh"
+    assert_file "$good/EWCProxy"   # never deleted
+}
+
+# VM scenario 9: Canon's own uninstaller ran first. It deletes the DAL
+# plug-in but leaves the fork's LaunchAgent and daemon running.
+make_fork_install_after_canon_uninstaller() {
+    mkdir -p "$RUNTIME"
+    local f
+    for f in $DAEMON_FILES; do echo fork > "$RUNTIME/$f"; done
+    echo '<fork config/>' > "$RUNTIME/config.plist"
+    echo 'canon-owned' > "$RUNTIME/SomethingCanonWrote.plist"
+    printf '<string>%s/eos-camera-manager.sh</string>\n' "$RUNTIME" > "$AGENT"
+    launchctl_lists "602|0|com.eos-camera-manager"
+    [ ! -e "$EOSWC_PLUGIN_DIR" ] || fail "setup: plug-in should be missing"
+}
+
+assert_clean_removal_without_restore() {
+    assert_status "$RC" 0
+    assert_contains "$OUT" "not installed"
+    assert_contains "$OUT" "Nothing to restore"
+    assert_lacks "$OUT" "mix of Canon's"
+    assert_lacks "$OUT" "Uninstall did not finish"
+    assert_lacks "$OUT" "Original EOS Webcam Utility v1.3.16 restored"
+    assert_lacks "$STUB_LOG" "osascript"
+    # The fork's daemon is stopped and stays stopped; Canon's service (whose
+    # binary went with the plug-in) is not started.
+    assert_contains "$STUB_LOG" "launchctl unload $AGENT"
+    assert_lacks "$STUB_LOG" "launchctl load"
+    assert_no_file "$AGENT"
+    local f
+    for f in $DAEMON_FILES; do assert_no_file "$RUNTIME/$f"; done
+    assert_file "$RUNTIME/SomethingCanonWrote.plist"
+    assert_no_file "$EOSWC_PLUGIN_DIR"
+}
+
+test_after_canons_uninstaller_removes_the_fork_cleanly_and_keeps_backups() {
+    make_fork_install_after_canon_uninstaller
+    local good
+    good="$(make_backup new pre-v1.4.1-20260920-100000 originals)"
+    echo '<canon config/>' > "$good/config.plist"
+    (cd "$good" && shasum ./*) > "$SANDBOX/backup.sum"
+    run_uninstall
+    assert_clean_removal_without_restore
+    assert_contains "$OUT" "Backups kept"
+    assert_contains "$OUT" "$good"
+    (cd "$good" && shasum ./*) > "$SANDBOX/backup-after.sum"
+    assert_same "$SANDBOX/backup-after.sum" "$SANDBOX/backup.sum"
+    assert_same "$RUNTIME/config.plist" "$good/config.plist"
+}
+
+test_after_canons_uninstaller_with_no_backup_still_removes_the_fork() {
+    make_fork_install_after_canon_uninstaller
+    run_uninstall
+    assert_clean_removal_without_restore
+    assert_lacks "$OUT" "No backup found"
+}
+
 test_removes_old_in_clone_daemon() {
     make_fork_install
     make_backup legacy pre-v1.4.1-20260920-100000 originals >/dev/null

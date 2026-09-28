@@ -68,6 +68,16 @@ trap restore_perms EXIT
 # STUB_ROOT_READONLY: a dir tree root cannot write to (simulates a failing
 # write, e.g. a full or read-only disk).
 [ -z "$readonly_dir" ] || [ ! -d "$readonly_dir" ] || find "$readonly_dir" -type d -exec chmod 555 {} +
+# STUB_ROOT_VANISH_STAGED: the staged patcher is gone by the time root runs,
+# as when the unprivileged side's EXIT trap deletes staging mid-step. Only
+# ever that one file, and only in an installer staging dir.
+if [ -n "${STUB_ROOT_VANISH_STAGED:-}" ] && [ -n "$file" ]; then
+    staged="$(dirname "$file")/patch-binaries.py"
+    case "$staged" in
+        /*/eoswc-stage.*/patch-binaries.py) rm -f "$staged" ;;
+        *) echo "osascript stub: unexpected staging path: $staged" >&2; exit 2 ;;
+    esac
+fi
 {
     echo "--- root script ---"
     echo "$body"

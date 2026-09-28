@@ -48,8 +48,8 @@ PATCHES = {
 }
 
 
-def patch_file(path, patches):
-    """Return 'patched', 'already', or exit on unexpected bytes."""
+def check_file(path, patches):
+    """Return (state, data): state is 'orig' or 'patched'; exit on unexpected bytes."""
     data = bytearray(open(path, "rb").read())
     state = None
     for off, orig_hex, patched_hex in patches:
@@ -71,28 +71,32 @@ def patch_file(path, patches):
             state = s
         elif state != s:
             sys.exit("ERROR: %s is in a mixed patch state — aborting." % os.path.basename(path))
+    return state, data
 
-    if state == "patched":
-        return "already"
 
+def write_patched(path, patches, data):
     for off, _orig_hex, patched_hex in patches:
         patched = bytes.fromhex(patched_hex)
         data[off:off + len(patched)] = patched
     open(path, "wb").write(bytes(data))
-    return "patched"
 
 
 def main():
     if len(sys.argv) != 2:
         sys.exit("usage: patch-binaries.py <path to EOSWebcamUtility.plugin/Contents>")
     contents = sys.argv[1]
-    any_patched = False
+    # Verify every binary before writing any, so an abort really changes nothing.
+    checked = []
     for rel, patches in PATCHES.items():
         path = os.path.join(contents, rel)
         if not os.path.exists(path):
             sys.exit("ERROR: expected binary not found: %s" % path)
-        result = patch_file(path, patches)
-        if result == "patched":
+        state, data = check_file(path, patches)
+        checked.append((rel, path, patches, state, data))
+    any_patched = False
+    for rel, path, patches, state, data in checked:
+        if state == "orig":
+            write_patched(path, patches, data)
             any_patched = True
             print("  patched:         %s" % rel)
         else:

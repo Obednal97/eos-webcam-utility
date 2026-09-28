@@ -118,3 +118,42 @@ If we build the extension, we can set `legacyDeviceID` to match our current DAL 
 ## No Changes Made
 
 This was a research-only investigation. No files were modified.
+
+## Addendum (2026-09-28): Canon already ships a signed Camera Extension
+
+This log reads as if a Camera Extension would have to be built from scratch.
+It missed that Canon's own v1.3.16 package already contains one. Expanding
+`EOSWebcamUtility-MAC1.3.16.pkg` (the one inside the pinned
+`EOSWebcamUtility-MAC1.3.16.pkg.zip`, sha256 5ad0333b...02321) shows:
+
+- `/Applications/EOS Webcam Utility/EOS Webcam Camera Extension Installer.app`
+  (bundle id `com.canon.cusa.eoswebcam.cameraExtension.installer`), the host
+  app, with `Contents/Library/SystemExtensions/com.canon.cusa.eoswebcam.cameraExtension.systemextension`
+  (CFBundlePackageType `SYSX`, a `CMIOExtension` with
+  `LSMinimumSystemVersion` 14.0). The strings in its binary list 720p and
+  1080p device sources at 30 and 60 fps.
+- The package is signed "Developer ID Installer: Canon U.S.A., Inc.
+  (NC5A977249)" and notarised (`pkgutil --check-signature`), so the extension
+  is signed by Canon and needs no developer certificate from us. That removes
+  blocker 1 above for *Canon's* extension; it doesn't help with building our
+  own.
+- Canon's `postinstall` runs the host app with `--args install` on macOS 14+
+  and exits 1 unless it returns 100 ("activated by the user"). It runs after
+  the payload (DAL plug-in, EDSDK, apps) and Canon's LaunchAgent are in place,
+  so a non-approval leaves everything installed except the extension, but
+  makes `installer` report failure. `install.sh` now treats exactly that case
+  as non-fatal (see the H4 fix in the installer-safety PR).
+- `/Applications/EOS Webcam Utility/EOS Webcam Utility Uninstaller.app`
+  removes all of Canon's software, running the host app to deactivate the
+  extension first.
+
+Once approved, the extension shows up as a second "EOS Webcam Utility" camera
+next to the fork's patched DAL plug-in. The fork doesn't patch the extension.
+Work log 011 (issue #3 branch) saw a working machine enumerate the camera
+through this extension, so whether it carries the fork's 1080p frames (it
+presumably talks to the patched EOSWebcamService) still needs checking on a
+real Mac.
+
+The decision above stands for building the fork's *own* extension. What
+changes is that the migration path may be "patch or feed Canon's signed
+extension" rather than "write and sign a new one".

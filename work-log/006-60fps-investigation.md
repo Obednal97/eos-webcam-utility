@@ -130,3 +130,96 @@ Apple introduced a purpose-built real-time frame interpolation API in macOS 15.4
 ## No Changes Made
 
 This was a research-only investigation. No files were modified.
+
+## Addendum (2026-09-28): what the fps bytes really do, and the fix
+
+Review finding M2: the fork's EWCProxy "fps 30 -> 60" patch changed `03` to
+`07` at 0x43811, which encodes `mov w8,#62`, not 60, while the README and
+the installer said 30fps. The disassembly below (`otool -tV` on the three
+binaries from Canon's pinned v1.3.16 package, expanded read-only with
+`pkgutil --expand-full`) shows where the frame rate comes from and why none
+of the three "30 -> 60" patches did what their comments said. Addresses are
+vmaddrs (file offset + 0x100000000 for EOSWebcamService and EWCProxy; the
+DAL plug-in's are the file offsets).
+
+### Canon's pipeline has two frame rates: 30 and 60
+
+- **EOSWebcamService.** The protobuf enum `APIGlobalSettings.StreamFps` has
+  `FPS_UNSPECIFIED`, `FPS_30`, `FPS_60` (strings in the binary; "GetGlobalSettings:
+  unexpected fps setting" for anything else). The StreamFps setter at
+  0x10008992c stores the value only if it is `#0x3c` (60) or `#0x1e` (30).
+  `SetIsPro(false)` at 0x100089b60 (called on the licence paths, e.g.
+  0x1000155fc with `w0 = 0`) resets StreamFps to 30 (`mov w8,#0x1e` at
+  0x100089bc4) along with the 1280x720 clamp the fork patches to 1080p.
+- **EWCProxy.** Reads `StreamFps` from config.plist (CFString at
+  0x100172658) through the setter at 0x100043584, which also accepts only 60
+  or 30. The initial value in `__DATA` (0x100174fb4) is 30. The getter
+  (0x100043578) feeds the frame pacing: waits of `1000 / fps` ms
+  (0x10001b638, 0x10001d224), and 0x100022cb4 returns
+  `min(1000 / measured camera frame interval, StreamFps)`, clamped to 1 when
+  no frame came for a second. So EWCProxy already follows the camera's real
+  rate, up to StreamFps.
+- **The patched `mov w8,#30` at 0x100043810** is in EWCProxy's own
+  "Pro turned off" reset (0x1000437b8: stores the flag, then resets fps,
+  1280x720 and a 1000 ms value). Nothing calls it: no `bl`/`b` to it, no
+  pointer to it in the data, no `adrp` to its page. The `#62` it was patched
+  to was dead code, and a value the setter would refuse anyway. (The four
+  EWCProxy width/height patches at 0x43849-0x43895 are in the same dead
+  function; they are harmless and left as they are.)
+- **The DAL plug-in** decides what apps are told.
+  `StreamClient::GetGlobalStreamSettings` (symbols are present) asks the
+  service for its settings and maps StreamFps at 0x3130c:
+
+  ```
+  3130c  mov  w9, #0x1e        ; 30
+  31310  mov  w10, #0x3c       ; 60
+  31314  cmp  w8, #0x2         ; FPS_60?
+  31318  csel w10, w10, w9, eq
+  3131c  cmp  w8, #0x1         ; FPS_30?
+  31320  csel w8, w9, w10, eq
+  31324  str  w8, [x19, #0x48] ; StreamClient::GetFps() returns this
+  ```
+
+  (30 if the service can't be reached, 0x312d0.) `GetFps()` is the stream's
+  `kCMIOStreamPropertyFrameRate` ('nfrt'), `FrameRates` ('nfr#'),
+  `MinimumFrameRate` ('mfrt') and `FrameRateRanges` ('frrg', min = max =
+  fps), and it sets the plug-in's frame timer (`dispatch_source_set_timer`
+  every 1e9/fps ns, 0x34d2c), queue depth (0x34f70) and sample times
+  (0x35530). The old patch `c903` -> `8907` made the first instruction
+  `mov w9,#60`, so **every** setting advertised 60 fps and the timer ran at
+  60 Hz, handing apps each camera frame two or three times.
+
+### Can a static patch give "the camera's maximum"?
+
+No. What apps are told is one number, fixed when the stream is set up, from
+the service's StreamFps (30 or 60). The camera's actual rate is only known
+while frames arrive, and EWCProxy already paces to it (up to StreamFps). The
+highest value the pipeline and the camera can really serve is therefore the
+smallest StreamFps at or above what the camera delivers. The one body
+measured, the 250D, sends 26 new frames a second over USB (above), and EDSDK
+live view (`EdsDownloadEvfData`) is generally about 30 fps at most. That is
+30.
+
+### Fix (PR C)
+
+- patch-binaries.py no longer patches either fps byte, and puts Canon's
+  bytes back on installs of fork v1.4.1/v1.4.2 (`REVERTS`). The whole chain
+  now follows config.plist's `StreamFps`, which the installer writes as 30:
+  the service reports FPS_30, the DAL plug-in advertises 30 and paces at
+  30 Hz, EWCProxy caps at 30 and follows the camera below that.
+- The README and the installer's "1920x1080 @ 30fps" are now true.
+- `dist/v1.4/measure-fps.sh` measures, read-only, what the camera really
+  delivers: the advertised modes, the negotiated format, the delivered
+  frame rate and spacing, and how many frames are new pictures.
+
+### Still to measure on a real Mac
+
+- The earlier note above that the plug-in advertised `[15 30]` doesn't match
+  this disassembly (min = max = GetFps). On the v1.4.2 install on this Mac
+  (read-only check), 0x3130c holds `mov w9,#60`, so the prediction is that
+  apps are told 60 fps and get ~26 new pictures a second; after the fix, 30
+  fps with ~26 new. measure-fps.sh before and after settles it.
+- Whether any EOS body delivers more than ~30 new frames a second over USB.
+  60 would need StreamFps 60 *and* the service's `SetIsPro(false)` reset
+  (0x100089bc4) changed, since that sets 30 back; untested, so not done.
+  measure-fps.sh says so if new pictures come as fast as the cap allows.

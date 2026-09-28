@@ -76,7 +76,23 @@ Three binary files were patched (ARM64 instruction-level modifications):
 3. **EWCProxy** — Default resolution and resolution switch cases changed from 720p to 1080p
 
 All patches are to Canon's software only. No macOS system files are modified.
-The exact offsets and before/after bytes live in [`dist/v1.4/patch-binaries.py`](dist/v1.4/patch-binaries.py), which applies them in place, verifies the original bytes first, and is idempotent.
+The exact offsets and before/after bytes live in [`dist/v1.4/patch-binaries.py`](dist/v1.4/patch-binaries.py), which applies them in place, verifies the original bytes first, and is idempotent. Each binary is written to a temp file next to it and renamed into place, so an interrupted patch never leaves a half-written file.
+
+The frame rate is **not** patched: it is 30fps, set by `StreamFps` in the
+config the installer writes, which is what the camera really delivers over
+USB (see [Known Limitations](#known-limitations)). Versions 1.4.1 and 1.4.2
+patched two "fps" bytes that made the plug-in tell apps 60fps (and put an
+unused 62 in EWCProxy) while the camera sent about 26 frames a second;
+installing this version puts Canon's bytes back
+([work log 006](work-log/006-60fps-investigation.md), addendum).
+
+The patched binaries are re-signed ad hoc (the fork has no certificate), but
+keep what Canon's signature had: `EOSWebcamService` and `EWCProxy` get the
+hardened runtime and Canon's camera entitlement, with their Canon
+identifiers. Both load Canon's `EDSDK.framework`, which the hardened runtime
+only allows for an ad hoc signature with library validation turned off, so
+that one entitlement is added ([`fork-entitlements.plist`](dist/v1.4/fork-entitlements.plist)).
+Older versions dropped the runtime and the entitlement.
 
 ---
 
@@ -187,11 +203,14 @@ state (not registered, waiting for approval, or enabled).
 
 1. Detects whether EOS Webcam Utility is already installed (fresh / original / previous fork)
 2. Obtains Canon's original binaries (installed / downloaded-and-checksummed / your `--pkg`)
-3. Runs Canon's own installer if the base software isn't present, then backs up Canon's original binaries for uninstall and verifies the backup (see [Backups](#backups)). If the backup can't be written or doesn't verify, it stops before patching anything
-4. Applies the fork's byte patches with `patch-binaries.py` (self-verifying: aborts on any non-v1.3.16 build) and re-signs. The loading-screen image the camera manager swaps (`errorNoDevice.jpg`) is made yours, mode 644; Canon's other two images go back to 644. Older installers made all three world-writable
+3. Stops the running services
+4. In the one step that needs your admin password: runs Canon's own installer if the base software isn't present, backs up Canon's whole signed plug-in for uninstall and verifies the backup (see [Backups](#backups); if the backup can't be written or doesn't verify, it stops before patching anything), applies the fork's byte patches with `patch-binaries.py` (self-verifying: aborts on any non-v1.3.16 build) and re-signs (see [What Was Patched](#what-was-patched)). If there was nothing to patch and the signatures are already this version's, nothing is re-signed. The loading-screen image the camera manager swaps (`errorNoDevice.jpg`) is made yours, mode 644; Canon's other two images go back to 644. Older installers made all three world-writable
 5. Sets configuration to 1920x1080 @ 30fps
 6. Installs the camera manager daemon (auto-starts on login), its custom loading screens and `generate-images.sh` into `~/Library/Application Support/EWCService/`
 7. Starts all services
+
+If you cancel the password prompt, nothing has been changed, and the
+installer starts the services it stopped again.
 
 The patch step never changes anything unless the exact original bytes are
 present, and it's idempotent, so re-running it is safe.
@@ -203,8 +222,15 @@ bash dist/v1.4/uninstall.sh
 ```
 
 Restores Canon's original files from the most recent backup that verifies as
-Canon's originals (see [Backups](#backups)). If there is no usable backup it
-stops before changing anything. If the restore fails part-way, it says so,
+Canon's originals (see [Backups](#backups)). A backup made by this version
+holds Canon's whole signed plug-in, which goes back byte for byte: afterwards
+`codesign --verify --deep --strict` passes with Canon's own signature (Team ID
+NC5A977249), and nothing is re-signed. A backup made by an older installer
+holds only the three binaries: those are copied back, `EOSWebcamService` and
+`EWCProxy` keep the (Canon) signatures they have in the backup, and the
+plug-in bundle is re-signed ad hoc, as before; the uninstaller says so, and
+reinstalling Canon's v1.3.16 package afterwards gets Canon's exact plug-in
+back. If there is no usable backup it stops before changing anything. If the restore fails part-way, it says so,
 exits with an error and leaves the fork's daemon in place. After a verified
 restore it:
 
@@ -237,17 +263,26 @@ it, keeps the backups, and starts nothing.
 
 ### Backups
 
-Before patching, the installer copies Canon's original `EOSWebcamUtility`,
-`EOSWebcamService` and `EWCProxy` (plus Canon's images and config files) to
-`~/Library/Application Support/EWCService/backups/pre-v<version>-<date>/`.
+Before patching, the installer copies Canon's whole plug-in bundle with
+`ditto` (its `_CodeSignature`, `Info.plist`, the three binaries and the
+images, byte for byte) to
+`~/Library/Application Support/EWCService/backups/pre-v<version>-<date>/EOSWebcamUtility.plugin`,
+with `EOSWebcamUtility`, `EOSWebcamService` and `EWCProxy` next to it as hard
+links into that copy (what older uninstallers read; no second copy), plus
+Canon's config files and the plug-in's owner.
 It then checks the copy with `patch-binaries.py --check-original`: each file
 must match the SHA-256 of the one in Canon's v1.3.16 package or, if it isn't
 byte-identical (for example re-signed), hold Canon's original bytes at every
 patch offset and not be truncated. Only then does it patch. If a backup in
-that folder already holds exactly the installed files, it's reused instead of
-copied again. If the installed binaries are neither Canon's originals nor the
-fork's (another build, half-patched, truncated), the installer stops before
-changing anything.
+that folder already holds the installed files, it's reused instead of copied
+again, so uninstalling and reinstalling doesn't add a backup each time. That
+includes installed files that are the same code as the backup but signed
+differently (older uninstallers re-signed Canon's originals ad hoc). The one
+exception: if that backup has only the three binaries and the installed
+plug-in is Canon's own signed bundle, one full backup is taken, so uninstall
+can put Canon's signature back. If the installed binaries are neither
+Canon's originals nor the fork's (another build, half-patched, truncated),
+the installer stops before changing anything.
 
 That folder is used because the admin step can write there (macOS privacy
 protection doesn't cover it), macOS doesn't clear it the way it clears temp
@@ -298,6 +333,23 @@ report before you post it**.
 5. Wait ~20-30 seconds for the camera to connect (you'll see a loading screen)
 6. Live 1080p feed appears
 
+### Measuring the Frame Rate
+
+```bash
+bash dist/v1.4/measure-fps.sh
+```
+
+With the camera connected and showing a live picture in an app, this reports
+what the "EOS Webcam Utility" camera advertises, the format ffmpeg
+negotiates, and over a 10-second capture the frame rate that really arrives,
+the spacing between frames and how many frames are new pictures. It is
+read-only: it installs and changes nothing, saves no images (frames are only
+hashed) and prints only numbers. It needs ffmpeg (`brew install ffmpeg`; it
+won't install it for you). The first run asks whether your terminal app may
+use the camera. `--seconds N`, `--warmup N` and `--device INDEX` adjust it.
+Please add its `RESULT` line to an issue if your camera reports more than 30
+new pictures a second.
+
 ### Custom Logo on Loading Screen
 
 The daemon and its images are installed to `~/Library/Application Support/EWCService/`
@@ -318,7 +370,7 @@ The logo is automatically scaled to fit (never stretched) and placed above the "
 
 ## Known Limitations
 
-- **~30fps maximum** — The camera's USB EVF outputs ~26 unique frames per second. This is a hardware/firmware limitation, not software. 60fps is only possible via HDMI output.
+- **30fps** — Apps are told 30fps, and the camera's USB live view sends about 26-30 new frames a second (the 250D measured 26), so some frames are repeats. This is a camera/firmware limit, not software: Canon's pipeline only knows 30 and 60, and it already follows the camera's real rate up to the configured one, so advertising 60 only doubles up frames (versions 1.4.1 and 1.4.2 did that). 60fps is only possible via HDMI output. `measure-fps.sh` (below) shows what your camera really delivers.
 - **1080p is upscaled** — The camera sends ~1024x576 natively over USB. The 1080p output is upscaled using DCT-domain scaling. True native 1080p requires HDMI output + capture card.
 - **Camera activation takes ~20-30 seconds** — Due to a race condition with macOS's `ptpcamerad` service. The daemon handles this automatically but it takes a few retry cycles.
 - **DAL plugin architecture is deprecated** — Apple deprecated CoreMediaIO DAL plugins at WWDC 2022. The plugin still works on current macOS but may break in future versions. Canon's own v1.3.16 package already ships a signed Camera Extension (see [Canon's Camera Extension](#canons-camera-extension-macos-14-and-later)), but the fork doesn't patch it; moving the fork's changes to a Camera Extension is still open (work log 009).

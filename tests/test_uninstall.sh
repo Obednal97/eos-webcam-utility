@@ -226,6 +226,7 @@ test_cancelled_admin_prompt_restarts_services() {
     export STUB_OSASCRIPT_CANCEL=1
     run_uninstall; assert_status "$RC" 1
     assert_contains "$OUT" "Uninstall did not finish"
+    assert_contains "$OUT" "Nothing was restored: the fork is still installed"
     assert_lacks "$OUT" "Original binaries restored"
     assert_contains "$STUB_LOG" "launchctl load /Library/LaunchAgents/com.canon.usa.EWCService.plist"
     assert_contains "$STUB_LOG" "launchctl load $AGENT"
@@ -233,6 +234,29 @@ test_cancelled_admin_prompt_restarts_services() {
     assert_file "$AGENT"
     assert_file "$RUNTIME/eos-camera-manager.sh"
     assert_same "$RES/EOSWebcamService" "$PATCHED/Contents/Resources/EOSWebcamService"
+}
+
+test_failed_restore_is_reported_as_failure() {
+    make_fork_install
+    local good
+    good="$(make_backup new pre-v1.4.1-20260920-100000 originals)"
+    # Root's copy of the third binary fails, after the first two went in.
+    chmod 444 "$RES/EWCProxy"
+    run_uninstall
+    [ "$RC" != 0 ] || fail "uninstall exited 0 after a failed restore"
+    assert_lacks "$OUT" "Original binaries restored"
+    assert_lacks "$OUT" "Uninstall complete."
+    assert_contains "$OUT" "The restore stopped part-way"
+    assert_contains "$OUT" "Your backup is untouched: $good"
+    # It stopped at the failed cp: no signing, nothing removed afterwards.
+    sed '/--- root script ---/,/--- end root script ---/d' "$STUB_LOG" > "$SANDBOX/calls-only.log"
+    assert_lacks "$SANDBOX/calls-only.log" "codesign"
+    assert_same "$BIN/EOSWebcamUtility" "$good/EOSWebcamUtility"
+    assert_same "$RES/EWCProxy" "$PATCHED/Contents/Resources/EWCProxy"
+    assert_file "$AGENT"
+    assert_file "$RUNTIME/eos-camera-manager.sh"
+    holds_originals "$good" || fail "backup no longer verifies"
+    assert_contains "$STUB_LOG" "launchctl load $AGENT"
 }
 
 test_removes_old_in_clone_daemon() {

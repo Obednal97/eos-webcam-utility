@@ -77,17 +77,30 @@ fi
 echo "Restoring from backup: $BACKUP_DIR"
 echo ""
 
-# If the admin step is cancelled or fails, the fork's binaries are still in
-# place: restart the services so the camera keeps working.
+# If the admin step is cancelled or fails, say what state the plug-in is in
+# and restart the services so the camera keeps working as far as it can.
 SERVICES_STOPPED=0
+RESTORE_STARTED=0
 RESTORED=0
 STAGE=""
 on_exit() {
     [ -n "$STAGE" ] && rm -rf "$STAGE" 2>/dev/null
     if [ "$SERVICES_STOPPED" = 1 ] && [ "$RESTORED" != 1 ]; then
         echo ""
-        echo "  Uninstall did not finish — restarting services so the camera keeps"
-        echo "  working. Nothing was restored; re-run the uninstaller to try again."
+        echo "  Uninstall did not finish — restarting services."
+        if [ "$RESTORE_STARTED" != 1 ] ||
+           python3 "$PATCHER" --check-patched "$PLUGIN_DIR/Contents" >/dev/null 2>&1; then
+            echo "  Nothing was restored: the fork is still installed and working."
+            echo "  Re-run the uninstaller to try again."
+        elif python3 "$PATCHER" --check-original "$PLUGIN_DIR/Contents" >/dev/null 2>&1; then
+            echo "  Canon's original binaries were copied back, but a later step (signing)"
+            echo "  failed, so the camera may not work. Re-run the uninstaller."
+        else
+            echo "  The restore stopped part-way: the plug-in now holds a mix of Canon's"
+            echo "  and the fork's binaries and the camera may not work. Re-run the"
+            echo "  uninstaller to finish, or reinstall Canon's v1.3.16 package."
+        fi
+        echo "  Your backup is untouched: $BACKUP_DIR"
         launchctl load "$LAUNCH_AGENT_SYS" 2>/dev/null || true
         launchctl load "$LAUNCH_AGENTS/com.eos-camera-manager.plist" 2>/dev/null || true
     fi
@@ -112,9 +125,26 @@ if ! python3 "$PATCHER" --check-original "$STAGE"; then
     echo "ERROR: the staged copy of the backup failed verification — nothing was changed."
     exit 1
 fi
-for f in errorNoDevice.jpg errorBusy.jpg default.jpg; do
-    cp "$BACKUP_DIR/$f" "$STAGE/$f" 2>/dev/null || true
-done
+# Root copies the binaries, then the images the backup has, then re-signs.
+# set -e: any failed step stops it, and it is reported as a failure below.
+RESTORE_SCRIPT="$STAGE/restore.sh"
+{
+    echo '#!/bin/bash'
+    echo 'set -e'
+    for f in MacOS/EOSWebcamUtility Resources/EOSWebcamService Resources/EWCProxy; do
+        echo "cp $(eoswc_sq "$STAGE/${f#*/}") $(eoswc_sq "$PLUGIN_DIR/Contents/$f")"
+    done
+    for f in errorNoDevice.jpg errorBusy.jpg default.jpg; do
+        if cp "$BACKUP_DIR/$f" "$STAGE/$f" 2>/dev/null; then
+            echo "cp $(eoswc_sq "$STAGE/$f") $(eoswc_sq "$PLUGIN_DIR/Contents/Resources/$f")"
+        fi
+    done
+    for f in MacOS/EOSWebcamUtility Resources/EOSWebcamService Resources/EWCProxy; do
+        echo "codesign --force --sign - $(eoswc_sq "$PLUGIN_DIR/Contents/$f")"
+    done
+    echo "codesign --force --deep --sign - $(eoswc_sq "$PLUGIN_DIR")"
+} > "$RESTORE_SCRIPT"
+chmod 700 "$RESTORE_SCRIPT"
 
 # Stop services
 echo "[1/4] Stopping services..."
@@ -125,18 +155,16 @@ sleep 1
 
 # Restore binaries
 echo "[2/4] Restoring original binaries (admin required)..."
-osascript -e "do shell script \"
-cp '$STAGE/EOSWebcamUtility' '$PLUGIN_DIR/Contents/MacOS/EOSWebcamUtility'
-cp '$STAGE/EOSWebcamService' '$PLUGIN_DIR/Contents/Resources/EOSWebcamService'
-cp '$STAGE/EWCProxy' '$PLUGIN_DIR/Contents/Resources/EWCProxy'
-cp '$STAGE/errorNoDevice.jpg' '$PLUGIN_DIR/Contents/Resources/errorNoDevice.jpg' 2>/dev/null
-cp '$STAGE/errorBusy.jpg' '$PLUGIN_DIR/Contents/Resources/errorBusy.jpg' 2>/dev/null
-cp '$STAGE/default.jpg' '$PLUGIN_DIR/Contents/Resources/default.jpg' 2>/dev/null
-codesign --force --sign - '$PLUGIN_DIR/Contents/MacOS/EOSWebcamUtility'
-codesign --force --sign - '$PLUGIN_DIR/Contents/Resources/EOSWebcamService'
-codesign --force --sign - '$PLUGIN_DIR/Contents/Resources/EWCProxy'
-codesign --force --deep --sign - '$PLUGIN_DIR'
-\" with administrator privileges"
+RESTORE_STARTED=1
+if ! osascript -e "do shell script \"bash '$RESTORE_SCRIPT'\" with administrator privileges"; then
+    echo "ERROR: the admin step was cancelled or failed (see above)."
+    exit 1
+fi
+# Only call it restored once the plug-in itself verifies as Canon's originals.
+if ! python3 "$PATCHER" --check-original "$PLUGIN_DIR/Contents"; then
+    echo "ERROR: after the restore, the plug-in does not hold Canon's original binaries."
+    exit 1
+fi
 RESTORED=1
 
 rm -rf "$STAGE"

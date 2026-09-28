@@ -73,8 +73,20 @@ SERVICES_STOPPED=0
 INSTALL_COMPLETE=0
 WORK=""
 STAGE=""
+BACKUP_DIR=""
+# Copy root's snapshots of Canon's originals out of staging into the backup
+# dir. Also run on failure, so a patch step that dies part-way still leaves
+# uninstall something to restore from.
+save_snapshots() {
+    local f
+    [ -n "$STAGE" ] && [ -d "$STAGE/orig" ] && [ -n "$BACKUP_DIR" ] || return 0
+    for f in "$STAGE/orig/"*; do
+        [ -e "$f" ] && cp "$f" "$BACKUP_DIR/" 2>/dev/null || true
+    done
+}
 cleanup() {
     [ -n "$WORK" ] && rm -rf "$WORK" 2>/dev/null || true
+    save_snapshots
     [ -n "$STAGE" ] && rm -rf "$STAGE" 2>/dev/null || true
     if [ "$INSTALL_COMPLETE" != 1 ] && [ "$SERVICES_STOPPED" = 1 ]; then
         echo ""
@@ -252,7 +264,8 @@ STAGE="$(mktemp -d -t eoswc-stage)"
 cp "$PATCHER" "$STAGE/patch-binaries.py"
 mkdir -p "$STAGE/orig"
 if [ "$NEED_INSTALLER" = 1 ]; then
-    cp "$PKG_FILE" "$STAGE/canon.pkg"
+    # -R: a .pkg is either a flat file or a bundle-style directory.
+    cp -R "$PKG_FILE" "$STAGE/canon.pkg"
 fi
 ROOT_SCRIPT="$STAGE/deploy.sh"
 {
@@ -261,6 +274,8 @@ ROOT_SCRIPT="$STAGE/deploy.sh"
     [ "$NEED_INSTALLER" = 1 ] && echo "installer -pkg '$STAGE/canon.pkg' -target /"
     # Snapshot the pristine originals before patching so uninstall can restore them.
     echo "for f in '$PLUGIN_BIN/EOSWebcamUtility' '$PLUGIN_RES/EOSWebcamService' '$PLUGIN_RES/EWCProxy' '$PLUGIN_RES/EWCPairingService' '$PLUGIN_RES/errorNoDevice.jpg' '$PLUGIN_RES/errorBusy.jpg' '$PLUGIN_RES/default.jpg'; do [ -e \"\$f\" ] && cp \"\$f\" '$STAGE/orig/' 2>/dev/null || true; done"
+    # Never patch without a restorable snapshot of the three patched binaries.
+    echo "for f in EOSWebcamUtility EOSWebcamService EWCProxy; do [ -s '$STAGE/orig/'\$f ] || { echo \"ERROR: could not back up \$f; nothing was patched.\" >&2; exit 1; }; done"
     echo "/usr/bin/python3 '$STAGE/patch-binaries.py' '$PLUGIN_DIR/Contents'"
     echo "chmod 755 '$PLUGIN_BIN/EOSWebcamUtility' '$PLUGIN_RES/EOSWebcamService' '$PLUGIN_RES/EWCProxy'"
     echo "chmod 666 '$PLUGIN_RES/errorNoDevice.jpg' 2>/dev/null || true"
@@ -275,10 +290,19 @@ ROOT_SCRIPT="$STAGE/deploy.sh"
 chmod 700 "$ROOT_SCRIPT"
 osascript -e "do shell script \"bash '$ROOT_SCRIPT'\" with administrator privileges"
 # Pull the snapshots back out of staging (this shell does have folder access).
-for f in "$STAGE/orig/"*; do
-    [ -e "$f" ] && cp "$f" "$BACKUP_DIR/" 2>/dev/null || true
+save_snapshots
+BACKUP_OK=1
+for f in EOSWebcamUtility EOSWebcamService EWCProxy; do
+    [ -s "$BACKUP_DIR/$f" ] || BACKUP_OK=0
 done
-rm -rf "$STAGE"
+if [ "$BACKUP_OK" = 1 ]; then
+    rm -rf "$STAGE"
+else
+    # Keep the staged originals rather than delete the only copy.
+    echo "  WARNING: could not copy Canon's original binaries into $BACKUP_DIR."
+    echo "           They are still in $STAGE/orig — copy them there by hand,"
+    echo "           or uninstall.sh won't be able to restore them."
+fi
 STAGE=""
 echo "  Patched and signed"
 

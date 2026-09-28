@@ -14,6 +14,14 @@ USER_HOME="$HOME"
 # Match install.sh: the clone this script was run from (repo root).
 INSTALL_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 LAUNCH_AGENTS="$USER_HOME/Library/LaunchAgents"
+if [ ! -f "$SCRIPT_DIR/common.sh" ]; then
+    echo "ERROR: common.sh not found next to this script."
+    exit 1
+fi
+# shellcheck source=common.sh
+. "$SCRIPT_DIR/common.sh"
+# Canon's config dir, which is also where install.sh puts the daemon.
+SUPPORT_DIR="$EOSWC_RUNTIME_DIR"
 LAUNCH_AGENT_SYS="/Library/LaunchAgents/com.canon.usa.EWCService.plist"
 
 # A backup is restorable if it holds all three binaries and they are Canon's
@@ -123,21 +131,38 @@ rm -rf "$STAGE"
 STAGE=""
 echo "  Original binaries restored"
 
-# Restore configs
+# Restore configs. If the backup has none, Canon had never written one and
+# the installer created it, so remove it and let Canon recreate its default.
 echo "[3/4] Restoring original config..."
-cp "$BACKUP_DIR/config.plist" "$USER_HOME/Library/Application Support/EWCService/config.plist" 2>/dev/null || true
-cp "$BACKUP_DIR/proconfig.plist" "$USER_HOME/Library/Application Support/EWCService/proconfig.plist" 2>/dev/null || true
+for f in config.plist proconfig.plist; do
+    if [ -f "$BACKUP_DIR/$f" ]; then
+        mkdir -p "$SUPPORT_DIR"
+        cp "$BACKUP_DIR/$f" "$SUPPORT_DIR/$f"
+    else
+        rm -f "$SUPPORT_DIR/$f"
+    fi
+done
 
 # Remove daemon
 echo "[4/4] Removing camera manager..."
+OLD_DAEMON="$(eoswc_agent_daemon_path "$LAUNCH_AGENTS/com.eos-camera-manager.plist")"
 rm -f "$LAUNCH_AGENTS/com.eos-camera-manager.plist"
-# The daemon and its images are installed alongside the config (see install.sh:
-# launchd can't read the clone if it sits in ~/Downloads and friends).
-RUNTIME_DIR="$USER_HOME/Library/Application Support/EWCService"
-rm -f "$RUNTIME_DIR/eos-camera-manager.sh" \
-      "$RUNTIME_DIR/generate-images.sh" \
-      "$RUNTIME_DIR/errorNoDevice_connecting.jpg" \
-      "$RUNTIME_DIR/errorNoDevice_disconnected.jpg" 2>/dev/null || true
+# The daemon, its images and generate-images.sh live in Application Support
+# (see install.sh: launchd can't read the clone if it sits in ~/Downloads and
+# friends), next to Canon's config. Remove only what the installer put there,
+# plus the logo the README says to add; leave anything else alone.
+for f in $EOSWC_RUNTIME_FILES $EOSWC_LOGO_FILES; do
+    if [ -f "$SUPPORT_DIR/$f" ]; then
+        rm -f "$SUPPORT_DIR/$f"
+        echo "  Removed $SUPPORT_DIR/$f"
+    fi
+done
+rmdir "$SUPPORT_DIR" 2>/dev/null || true
+# Installs from before that ran the daemon out of the clone.
+if [ -n "$OLD_DAEMON" ]; then
+    eoswc_remove_legacy_runtime "$(dirname "$OLD_DAEMON")"
+fi
+eoswc_remove_legacy_runtime "$INSTALL_DIR"
 
 # Restart original service
 launchctl load "$LAUNCH_AGENT_SYS" 2>/dev/null || true

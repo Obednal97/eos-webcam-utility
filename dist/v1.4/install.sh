@@ -28,6 +28,12 @@ set -e
 VERSION="1.4.1"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PATCHER="$SCRIPT_DIR/patch-binaries.py"
+if [ ! -f "$SCRIPT_DIR/common.sh" ]; then
+    echo "  ERROR: common.sh not found next to this script."
+    exit 1
+fi
+# shellcheck source=common.sh
+. "$SCRIPT_DIR/common.sh"
 PLUGIN_DIR="/Library/CoreMediaIO/Plug-Ins/DAL/EOSWebcamUtility.plugin"
 PLUGIN_RES="$PLUGIN_DIR/Contents/Resources"
 PLUGIN_BIN="$PLUGIN_DIR/Contents/MacOS"
@@ -42,7 +48,7 @@ INSTALL_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 # A LaunchAgent gets no TCC access to ~/Downloads, ~/Desktop, ~/Documents or
 # iCloud Drive, so running the daemon out of the clone fails with "Operation not
 # permitted"; Application Support is outside TCC's reach.
-RUNTIME_DIR="$SUPPORT_DIR"
+RUNTIME_DIR="$EOSWC_RUNTIME_DIR"   # same dir as SUPPORT_DIR; see common.sh
 LOG_DIR="$USER_HOME/Library/Logs"
 
 # Canon's official EOS Webcam Utility v1.3.16 (still hosted by Canon as of 2026-07).
@@ -245,6 +251,9 @@ echo "  Backup dir: $BACKUP_DIR"
 
 # --- Stop services ---
 echo "[5/8] Stopping existing services..."
+# Older installers ran the daemon out of the clone; note where, so that copy
+# can be cleaned up once the new one is in place.
+OLD_DAEMON="$(eoswc_agent_daemon_path "$LAUNCH_AGENTS/com.eos-camera-manager.plist")"
 launchctl unload "$LAUNCH_AGENTS/com.eos-camera-manager.plist" 2>/dev/null || true
 launchctl unload "$LAUNCH_AGENT_SYS" 2>/dev/null || true
 pkill -9 EOSWebcamServic 2>/dev/null || true
@@ -360,7 +369,9 @@ echo "  Daemon: $RUNTIME_DIR/eos-camera-manager.sh"
 # themselves, so all three live together in the runtime dir — regenerating with
 # your own logo there is picked up without another copy step.
 if [ -d "$SCRIPT_DIR/images" ]; then
-    cp "$SCRIPT_DIR/images/"*.jpg "$RUNTIME_DIR/" 2>/dev/null || true
+    # Only the files uninstall.sh knows to remove (EOSWC_RUNTIME_FILES).
+    cp "$SCRIPT_DIR/images/errorNoDevice_connecting.jpg" \
+       "$SCRIPT_DIR/images/errorNoDevice_disconnected.jpg" "$RUNTIME_DIR/" 2>/dev/null || true
     cp "$SCRIPT_DIR/images/generate-images.sh" "$RUNTIME_DIR/" 2>/dev/null || true
     chmod +x "$RUNTIME_DIR/generate-images.sh" 2>/dev/null || true
     if [ -f "$RUNTIME_DIR/errorNoDevice_connecting.jpg" ]; then
@@ -368,6 +379,27 @@ if [ -d "$SCRIPT_DIR/images" ]; then
     fi
     echo "  Custom loading screens installed"
 fi
+
+# Upgrade from an in-clone install: carry a custom logo over, then remove the
+# old daemon copy and its images (the LaunchAgent is rewritten below). The
+# logo itself is left where it was.
+migrate_legacy_dir() {
+    local dir="$1" logo
+    [ -n "$dir" ] && [ -d "$dir" ] || return 0
+    [ "$dir" -ef "$RUNTIME_DIR" ] && return 0
+    for logo in $EOSWC_LOGO_FILES; do
+        if [ -f "$dir/$logo" ] && [ ! -e "$RUNTIME_DIR/$logo" ]; then
+            cp "$dir/$logo" "$RUNTIME_DIR/$logo"
+            echo "  Copied your $logo to $RUNTIME_DIR/"
+            echo "  (re-run generate-images.sh there to put it back on the loading screen)"
+        fi
+    done
+    eoswc_remove_legacy_runtime "$dir"
+}
+if [ -n "$OLD_DAEMON" ]; then
+    migrate_legacy_dir "$(dirname "$OLD_DAEMON")"
+fi
+migrate_legacy_dir "$INSTALL_DIR"
 
 # Auto-start
 rm -f "$LAUNCH_AGENTS/com.eos-camera-manager.plist" 2>/dev/null
@@ -404,10 +436,11 @@ sleep 1
 launchctl load "$LAUNCH_AGENTS/com.eos-camera-manager.plist" 2>/dev/null || true
 INSTALL_COMPLETE=1
 
-# A label appears in `launchctl list` even when its job is failing to start, so
-# check the PID column (field 1, "-" when not running) rather than mere presence.
-SVC=$(launchctl list 2>/dev/null | awk '$3=="com.canon.usa.EWCService" && $1!="-"' | wc -l | tr -d ' ')
-MGR=$(launchctl list 2>/dev/null | awk '$3=="com.eos-camera-manager" && $1!="-"' | wc -l | tr -d ' ')
+# Give a job that can't start (e.g. exit 126) time to fall over before
+# checking; eoswc_job_running reads the PID column, not mere presence.
+sleep 2
+SVC=0; eoswc_job_running "$EOSWC_CANON_LABEL" && SVC=1
+MGR=0; eoswc_job_running "$EOSWC_AGENT_LABEL" && MGR=1
 
 echo ""
 echo "============================================"
@@ -420,6 +453,11 @@ echo "  Resolution:     1920x1080 @ 30fps"
 echo "  EOS Service:    $([ "$SVC" -gt 0 ] && echo "RUNNING" || echo "NOT RUNNING")"
 echo "  Camera Manager: $([ "$MGR" -gt 0 ] && echo "RUNNING" || echo "NOT RUNNING")"
 echo "  Backups:        $BACKUP_DIR"
+if [ "$SVC" = 0 ] || [ "$MGR" = 0 ]; then
+    echo ""
+    echo "  Something isn't running. Check $LOG_DIR/eos-camera-manager-stderr.log"
+    echo "  and run: bash '$SCRIPT_DIR/diagnose.sh'"
+fi
 echo ""
 echo "  Usage:"
 echo "    1. Connect your EOS camera via USB"

@@ -66,6 +66,52 @@ eoswc_physical_path() {
     printf '%s%s\n' "${p%/}" "$rest"
 }
 
+# Print the test sandbox's physical path if EOSWC_TEST_SANDBOX is a dir the
+# test harness created and marked; fail otherwise.
+eoswc_marked_sandbox() {
+    local sandbox="${EOSWC_TEST_SANDBOX:-}" rsand=""
+    [ -n "$sandbox" ] || return 1
+    rsand="$(cd "$sandbox" 2>/dev/null && pwd -P)" || return 1
+    [ -n "$rsand" ] && [ "$rsand" != / ] && [ -f "$rsand/.eoswc-test-sandbox" ] &&
+        [ "$(cat "$rsand/.eoswc-test-sandbox" 2>/dev/null)" = "$rsand" ] || return 1
+    printf '%s\n' "$rsand"
+}
+
+# Refuse (loudly, exit status 1) if test-only hook $1 (a variable name) is set
+# outside a marked test sandbox. Never silently falls back to the real value.
+eoswc_require_sandbox_for() {
+    local name="$1" value
+    value="${!name:-}"
+    [ -n "$value" ] || return 0
+    eoswc_marked_sandbox >/dev/null && return 0
+    echo "ERROR: $name is set ($value), but it is a test-only hook" >&2
+    echo "       and this is not a test sandbox. Refusing to run. Unset it:" >&2
+    echo "         unset $name" >&2
+    return 1
+}
+
+# Print the path a test-only path hook stands for: $3 (the real path) unless
+# hook $1 (a variable name, value $2) is set, in which case it must be inside
+# a marked test sandbox and resolve inside it. Fails loudly otherwise.
+eoswc_sandboxed_path() {
+    local name="$1" value="$2" real="$3" rsand rpath
+    if [ -z "$value" ]; then
+        printf '%s\n' "$real"
+        return 0
+    fi
+    eoswc_require_sandbox_for "$name" || return 1
+    rsand="$(eoswc_marked_sandbox)" || return 1
+    rpath="$(eoswc_physical_path "$value")" || rpath=""
+    case "$rpath" in
+        "$rsand"/?*) ;;
+        *)
+            echo "ERROR: $name ($value) is outside the test sandbox" >&2
+            echo "       $rsand. Refusing to run." >&2
+            return 1 ;;
+    esac
+    printf '%s\n' "$rpath"
+}
+
 # Set EOSWC_PLUGIN to the plug-in path the scripts act on: always the real one,
 # except that tests/ may point EOSWC_PLUGIN_DIR at a fake plug-in. That hook is
 # honoured only inside a test sandbox: EOSWC_TEST_SANDBOX must be a dir the
@@ -73,28 +119,10 @@ eoswc_physical_path() {
 # it. Anything else is refused, loudly, rather than silently falling back:
 # uninstall.sh copies files into this path and code-signs it as root.
 eoswc_select_plugin_dir() {
-    local sandbox="${EOSWC_TEST_SANDBOX:-}" rsand="" rplug=""
     EOSWC_PLUGIN="$EOSWC_REAL_PLUGIN_DIR"
-    [ -n "${EOSWC_PLUGIN_DIR:-}" ] || return 0
-    if [ -n "$sandbox" ]; then
-        rsand="$(cd "$sandbox" 2>/dev/null && pwd -P)" || rsand=""
-    fi
-    if [ -z "$rsand" ] || [ "$rsand" = / ] || [ ! -f "$rsand/.eoswc-test-sandbox" ] ||
-       [ "$(cat "$rsand/.eoswc-test-sandbox" 2>/dev/null)" != "$rsand" ]; then
-        echo "ERROR: EOSWC_PLUGIN_DIR is set ($EOSWC_PLUGIN_DIR), but it is a test-only hook" >&2
-        echo "       and this is not a test sandbox. Refusing to run. Unset it:" >&2
-        echo "         unset EOSWC_PLUGIN_DIR" >&2
-        return 1
-    fi
-    rplug="$(eoswc_physical_path "$EOSWC_PLUGIN_DIR")" || rplug=""
-    case "$rplug" in
-        "$rsand"/?*) ;;
-        *)
-            echo "ERROR: EOSWC_PLUGIN_DIR ($EOSWC_PLUGIN_DIR) is outside the test sandbox" >&2
-            echo "       $rsand. Refusing to run." >&2
-            return 1 ;;
-    esac
-    EOSWC_PLUGIN="$rplug"
+    local p
+    p="$(eoswc_sandboxed_path EOSWC_PLUGIN_DIR "${EOSWC_PLUGIN_DIR:-}" "$EOSWC_REAL_PLUGIN_DIR")" || return 1
+    EOSWC_PLUGIN="$p"
 }
 
 # Refuse to run as root. The scripts ask for admin rights themselves, for one

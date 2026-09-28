@@ -14,13 +14,16 @@
 #   1. An EOS Webcam Utility already installed on this Mac (patched in place)
 #   2. Canon's official v1.3.16 package, downloaded from Canon and verified
 #   3. A package you supply yourself:  bash install.sh --pkg /path/to/pkg[.zip]
+#      It must match the SHA-256 of Canon's v1.3.16 package (the .zip or the
+#      .pkg inside it). --allow-unverified-pkg overrides that: don't use it
+#      unless you know exactly where the package came from.
 #
 # Requirements:
 #   - macOS on Apple Silicon (M1/M2/M3/M4)
 #   - Admin privileges (run WITHOUT sudo; you'll be prompted for your password)
 #   - Internet access (only if Canon's package needs to be downloaded)
 #
-# Usage: bash install.sh [--pkg PATH] [--agree]
+# Usage: bash install.sh [--pkg PATH [--allow-unverified-pkg]] [--agree]
 #
 
 set -e
@@ -38,6 +41,10 @@ eoswc_refuse_root || exit 1
 # The real plug-in path, unless a test sandbox says otherwise (see common.sh).
 eoswc_select_plugin_dir || exit 1
 PLUGIN_DIR="$EOSWC_PLUGIN"
+# EOSWC_TEST_PKG_SHA256: one more accepted --pkg checksum, so tests/ can
+# install a fake package. Honoured only inside a marked test sandbox.
+eoswc_require_sandbox_for EOSWC_TEST_PKG_SHA256 || exit 1
+TEST_PKG_SHA256="${EOSWC_TEST_PKG_SHA256:-}"
 PLUGIN_RES="$PLUGIN_DIR/Contents/Resources"
 PLUGIN_BIN="$PLUGIN_DIR/Contents/MacOS"
 LAUNCH_AGENT_SYS="/Library/LaunchAgents/com.canon.usa.EWCService.plist"
@@ -62,20 +69,33 @@ LOG_DIR="$USER_HOME/Library/Logs"
 # byte verification (any path), so patches can never be misapplied.
 CANON_PKG_URL="https://downloads.canon.com/webcam/EOSWebcamUtility-MAC1.3.16.pkg.zip"
 CANON_PKG_SHA256="5ad0333bd6a1c66f88c70aac631e5133c5f3dd6fc579e45dd473d1e964c02321"
+# The .pkg inside that .zip (EOSWebcamUtility-MAC1.3.16.pkg), for a --pkg that
+# is the bare .pkg. It is a flat package signed "Developer ID Installer:
+# Canon U.S.A., Inc. (NC5A977249)" and notarised.
+CANON_INNER_PKG_SHA256="cb368a204db87047fa5e47c8593ac0e654baee39e0c302bed3f7d3cf5364c0eb"
+CANON_PKG_SIGNER="Developer ID Installer: Canon U.S.A., Inc. (NC5A977249)"
 
 # --- Args ---
 USER_PKG=""
+ALLOW_UNVERIFIED_PKG=0
 AGREED=0
 while [ $# -gt 0 ]; do
     case "$1" in
-        --pkg) USER_PKG="$2"; shift 2 ;;
+        --pkg)
+            [ $# -ge 2 ] && [ -n "$2" ] || { echo "--pkg needs a path"; exit 1; }
+            USER_PKG="$2"; shift 2 ;;
+        --allow-unverified-pkg) ALLOW_UNVERIFIED_PKG=1; shift ;;
         --agree|--yes|-y) AGREED=1; shift ;;
         -h|--help)
-            grep '^#' "$0" | sed 's/^# \{0,1\}//' | head -30
+            grep '^#' "$0" | sed 's/^# \{0,1\}//' | head -33
             exit 0 ;;
         *) echo "Unknown option: $1"; exit 1 ;;
     esac
 done
+if [ "$ALLOW_UNVERIFIED_PKG" = 1 ] && [ -z "$USER_PKG" ]; then
+    echo "--allow-unverified-pkg only applies to --pkg"
+    exit 1
+fi
 
 # --- Failure safety ---
 # If the install is interrupted after we've stopped the existing services,
@@ -85,6 +105,65 @@ INSTALL_COMPLETE=0
 WORK=""
 STAGE=""
 BACKUP_DIR=""
+# True if SHA-256 $1 is a pinned checksum of Canon's v1.3.16 package.
+pkg_sha_pinned() {
+    [ -n "$1" ] || return 1
+    [ "$1" = "$CANON_PKG_SHA256" ] || [ "$1" = "$CANON_INNER_PKG_SHA256" ] ||
+        { [ -n "$TEST_PKG_SHA256" ] && [ "$1" = "$TEST_PKG_SHA256" ]; }
+}
+
+# Check a --pkg ($USER_PKG, and $PKG_FILE, the .pkg in it) before root ever
+# runs it. Exits unless it is pinned or --allow-unverified-pkg was given.
+verify_user_pkg() {
+    local sha="" inner="" why sig signer
+    [ -f "$USER_PKG" ] && sha="$(shasum -a 256 "$USER_PKG" | awk '{print $1}')"
+    if pkg_sha_pinned "$sha"; then
+        echo "  Verified: SHA-256 matches Canon's v1.3.16 package."
+        return 0
+    fi
+    if [ -f "$PKG_FILE" ] && [ "$PKG_FILE" != "$USER_PKG" ]; then
+        inner="$(shasum -a 256 "$PKG_FILE" | awk '{print $1}')"
+        if pkg_sha_pinned "$inner"; then
+            echo "  Verified: the .pkg inside matches Canon's v1.3.16 package (SHA-256)."
+            return 0
+        fi
+    fi
+    if [ -d "$PKG_FILE" ]; then
+        why="it is a bundle-style (folder) package, which can't be checked against"
+        why="$why the pinned SHA-256"
+    else
+        why="its SHA-256 (${inner:-$sha}) isn't the one pinned for Canon's v1.3.16 package"
+    fi
+    sig="$(pkgutil --check-signature "$PKG_FILE" 2>&1)" || true
+    if printf '%s\n' "$sig" | grep -qF "$CANON_PKG_SIGNER" &&
+       printf '%s\n' "$sig" | grep -qF "Status: signed by a developer certificate issued by Apple"; then
+        signer="signed by Canon ($CANON_PKG_SIGNER), but not the v1.3.16 build the patches are for"
+    else
+        signer="NOT signed by Canon"
+    fi
+    if [ "$ALLOW_UNVERIFIED_PKG" != 1 ]; then
+        echo "  ERROR: refusing to use $USER_PKG:"
+        echo "         $why;"
+        echo "         it is $signer."
+        echo "         Canon's installer runs as root, so only Canon's exact v1.3.16 package"
+        echo "         is accepted. Nothing was changed. Get it from Canon:"
+        echo "           $CANON_PKG_URL"
+        echo "         (or leave out --pkg and the installer downloads and checks it)."
+        exit 1
+    fi
+    echo ""
+    echo "  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+    echo "  !! WARNING: --allow-unverified-pkg: using a package that FAILED checks. !!"
+    echo "  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+    echo "  $USER_PKG:"
+    echo "    - $why"
+    echo "    - it is $signer"
+    echo "  It will be run AS ROOT by macOS's installer. If it isn't really Canon's"
+    echo "  v1.3.16 package it can do anything to this Mac. Cancel the password prompt"
+    echo "  that comes next unless you know exactly where it came from."
+    echo ""
+}
+
 # Staging only ever holds copies of things that exist elsewhere (the patcher,
 # the Canon .pkg, the root script): Canon's originals go straight from the
 # plug-in into BACKUP_DIR, so deleting staging can never lose them.
@@ -229,7 +308,7 @@ else
     case "$SRC" in
         *.zip)
             ditto -x -k "$SRC" "$WORK/unz" 2>/dev/null || { echo "  ERROR: could not unzip package."; exit 1; }
-            PKG_FILE=$(/usr/bin/find "$WORK/unz" -name '*.pkg' -maxdepth 3 | head -1) ;;
+            PKG_FILE=$(/usr/bin/find "$WORK/unz" -maxdepth 3 -name '*.pkg' ! -name '._*' | awk 'NR == 1') ;;
         *.pkg)
             PKG_FILE="$SRC" ;;
         *)
@@ -238,6 +317,14 @@ else
     if [ -z "$PKG_FILE" ] || [ ! -e "$PKG_FILE" ]; then
         echo "  ERROR: no .pkg found in the supplied package."
         exit 1
+    fi
+    # A package you supply is run by root with Canon's installer, so it must be
+    # exactly Canon's v1.3.16 package: the .zip, or the .pkg inside it, by
+    # SHA-256. A valid Canon signature alone is not enough: Canon signs every
+    # build, and any other build would replace your Canon software as root
+    # before the patcher refused it.
+    if [ "$SOURCE" = "userpkg" ]; then
+        verify_user_pkg
     fi
     NEED_INSTALLER=1
     echo "  Package ready: $(basename "$PKG_FILE")"

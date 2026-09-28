@@ -194,6 +194,8 @@ done
 echo "[4/4] Removing camera manager..."
 OLD_DAEMON="$(eoswc_agent_daemon_path "$LAUNCH_AGENTS/com.eos-camera-manager.plist")"
 rm -f "$LAUNCH_AGENTS/com.eos-camera-manager.plist"
+# The fork's first camera manager (com.canon-camera-manager), if still there.
+eoswc_remove_legacy_agent
 # The daemon, its images and generate-images.sh live in Application Support
 # (see install.sh: launchd can't read the clone if it sits in ~/Downloads and
 # friends), next to Canon's config. Remove only what the installer put there,

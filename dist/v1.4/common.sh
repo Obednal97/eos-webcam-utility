@@ -249,3 +249,59 @@ eoswc_plist_value() {
     plutil -extract "$2" raw -o - "$1" 2>/dev/null
 }
 
+# The fork's first camera manager ran as LaunchAgent com.canon-camera-manager,
+# from a canon-camera-manager.sh in the clone (work logs 007 and 008). It
+# fights the current daemon over restarting Canon's service, so install and
+# uninstall remove it, but only if it really is the fork's: that label, and a
+# program path ending in /canon-camera-manager.sh.
+EOSWC_LEGACY_LABEL="com.canon-camera-manager"
+EOSWC_LEGACY_PLIST="$HOME/Library/LaunchAgents/$EOSWC_LEGACY_LABEL.plist"
+
+# True if plist $1 is the fork's legacy camera manager agent. Prints the
+# program it runs.
+eoswc_legacy_agent_matches() {
+    local plist="$1" key arg
+    [ -f "$plist" ] || return 1
+    [ "$(eoswc_plist_value "$plist" Label)" = "$EOSWC_LEGACY_LABEL" ] || return 1
+    for key in Program ProgramArguments.0 ProgramArguments.1 ProgramArguments.2; do
+        arg="$(eoswc_plist_value "$plist" "$key")" || continue
+        case "$arg" in
+            /*/canon-camera-manager.sh)
+                printf '%s\n' "$arg"
+                return 0 ;;
+        esac
+    done
+    return 1
+}
+
+# Stop and remove the legacy agent (bootout first, then the plist) and the
+# launchd stdout/stderr logs it wrote to ~/Library/Logs. A plist with that
+# name that doesn't match is left alone, with a warning.
+eoswc_remove_legacy_agent() {
+    local plist="$EOSWC_LEGACY_PLIST" logs="$HOME/Library/Logs" f rest out="" err=""
+    [ -e "$plist" ] || return 0
+    if ! eoswc_legacy_agent_matches "$plist" >/dev/null; then
+        echo "  WARNING: left $plist alone: it doesn't run the fork's old"
+        echo "           canon-camera-manager.sh, so it isn't the fork's to remove."
+        return 0
+    fi
+    out="$(eoswc_plist_value "$plist" StandardOutPath)" || out=""
+    err="$(eoswc_plist_value "$plist" StandardErrorPath)" || err=""
+    launchctl bootout "gui/$(id -u)/$EOSWC_LEGACY_LABEL" 2>/dev/null || true
+    rm -f "$plist"
+    echo "  Removed the old camera manager LaunchAgent ($EOSWC_LEGACY_LABEL)"
+    for f in "$out" "$err" "$logs/canon-camera-manager-stdout.log" "$logs/canon-camera-manager-stderr.log"; do
+        # Only log files directly in ~/Library/Logs with the old daemon's name.
+        rest="${f#"$logs/"}"
+        [ "$rest" != "$f" ] || continue
+        case "$rest" in
+            */*) continue ;;
+            canon-camera-manager*.log) ;;
+            *) continue ;;
+        esac
+        if [ -f "$f" ] && [ ! -L "$f" ]; then
+            rm -f "$f" && echo "  Removed $f"
+        fi
+    done
+    return 0
+}

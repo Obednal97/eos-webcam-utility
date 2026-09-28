@@ -14,6 +14,7 @@
 #   - Whether the EDSDK framework is present
 #   - Whether the background services/processes are running
 #   - Where the camera manager is installed, and whether launchd can run it
+#   - Whether the fork's old com.canon-camera-manager agent is still there
 #   - Canon's Camera Extension (macOS 14+): installed, approved, or not
 #   - Whether the config files exist
 #   - Whether your Canon camera is seen on USB
@@ -129,6 +130,22 @@ if [ -f "$AGENT_PLIST" ]; then
     esac
 else
     echo "LaunchAgent: not installed ($AGENT_PLIST missing)"
+fi
+
+echo; echo "----- Old camera manager ($EOSWC_LEGACY_LABEL) -----"
+if [ -e "$EOSWC_LEGACY_PLIST" ]; then
+    if LEGACY_PROG="$(eoswc_legacy_agent_matches "$EOSWC_LEGACY_PLIST")"; then
+        echo "[WARN] the old camera manager LaunchAgent of the fork is still installed:"
+        echo "       $EOSWC_LEGACY_PLIST runs $LEGACY_PROG"
+        echo "       It fights the current camera manager. Re-run the installer (or"
+        echo "       uninstall.sh), which removes it."
+    else
+        echo "$EOSWC_LEGACY_PLIST exists but does not run the old fork"
+        echo "canon-camera-manager.sh, so it is not from the fork (left alone)."
+    fi
+    job_status "$EOSWC_LEGACY_LABEL"
+else
+    echo "not installed (good)"
 fi
 
 # (No "X's " possessives in this section: the name redaction mangles them.)

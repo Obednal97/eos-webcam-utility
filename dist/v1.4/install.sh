@@ -421,6 +421,8 @@ launchctl unload "$LAUNCH_AGENT_SYS" 2>/dev/null || true
 pkill -9 EOSWebcamServic 2>/dev/null || true
 pkill -9 EWCProxy 2>/dev/null || true
 SERVICES_STOPPED=1
+# The fork's first camera manager, if it's still there, would fight this one.
+eoswc_remove_legacy_agent
 sleep 1
 echo "  Done"
 

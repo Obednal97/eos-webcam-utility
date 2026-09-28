@@ -1,0 +1,5 @@
+#!/bin/bash
+# Test stub: no USB devices, and the virtual camera is visible.
+echo "system_profiler $*" >> "${STUB_LOG:?STUB_LOG not set}"
+[ "${1:-}" = SPCameraDataType ] && printf 'Camera:\n\n    EOS Webcam Utility:\n\n      Model ID: x\n'
+exit 0

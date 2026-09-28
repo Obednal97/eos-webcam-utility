@@ -31,7 +31,8 @@
 #
 
 OUT="$HOME/Desktop/eos-webcam-diagnostics.txt"
-PLUGIN="/Library/CoreMediaIO/Plug-Ins/DAL/EOSWebcamUtility.plugin"
+# EOSWC_PLUGIN_DIR exists only so tests/ can run against a fake plug-in; leave it unset.
+PLUGIN="${EOSWC_PLUGIN_DIR:-/Library/CoreMediaIO/Plug-Ins/DAL/EOSWebcamUtility.plugin}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 if [ ! -f "$SCRIPT_DIR/common.sh" ]; then
     echo "ERROR: common.sh not found next to this script."
@@ -80,7 +81,7 @@ echo "arch: $(uname -m)"
 csrutil status 2>/dev/null || echo "csrutil unavailable"
 
 echo; echo "----- Is the plug-in installed? -----"
-ls -la "/Library/CoreMediaIO/Plug-Ins/DAL/" 2>&1
+ls -la "$(dirname "$PLUGIN")/" 2>&1
 
 echo; echo "----- Plug-in code signature -----"
 echo "(the executable should be present and signed 'adhoc'; that is expected for this fork)"

@@ -34,7 +34,8 @@ if [ ! -f "$SCRIPT_DIR/common.sh" ]; then
 fi
 # shellcheck source=common.sh
 . "$SCRIPT_DIR/common.sh"
-PLUGIN_DIR="/Library/CoreMediaIO/Plug-Ins/DAL/EOSWebcamUtility.plugin"
+# EOSWC_PLUGIN_DIR exists only so tests/ can run against a fake plug-in; leave it unset.
+PLUGIN_DIR="${EOSWC_PLUGIN_DIR:-/Library/CoreMediaIO/Plug-Ins/DAL/EOSWebcamUtility.plugin}"
 PLUGIN_RES="$PLUGIN_DIR/Contents/Resources"
 PLUGIN_BIN="$PLUGIN_DIR/Contents/MacOS"
 LAUNCH_AGENT_SYS="/Library/LaunchAgents/com.canon.usa.EWCService.plist"

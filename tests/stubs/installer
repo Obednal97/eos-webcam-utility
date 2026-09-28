@@ -1,0 +1,21 @@
+#!/bin/bash
+# Test stub for Canon's `installer -pkg X -target /`: checks the package is
+# readable (flat file or bundle dir), then lays down a FAKE plug-in in
+# $EOSWC_PLUGIN_DIR (inside the test sandbox).
+echo "installer $*" >> "${STUB_LOG:?STUB_LOG not set}"
+[ "${1:-}" = "-pkg" ] || { echo "installer stub: expected -pkg" >&2; exit 2; }
+pkg="$2"
+if [ -d "$pkg" ]; then
+    [ -r "$pkg/Contents/Info.plist" ] || { echo "installer: cannot read bundle $pkg" >&2; exit 1; }
+    echo "installer-kind bundle" >> "$STUB_LOG"
+elif [ -f "$pkg" ]; then
+    head -c 4 "$pkg" >/dev/null || { echo "installer: cannot read $pkg" >&2; exit 1; }
+    echo "installer-kind flat" >> "$STUB_LOG"
+else
+    echo "installer: $pkg not found" >&2; exit 1
+fi
+case "${EOSWC_PLUGIN_DIR:?}" in
+    "${EOSWC_TEST_SANDBOX:?}"/*) ;;
+    *) echo "installer stub: plug-in dir outside sandbox" >&2; exit 2 ;;
+esac
+/usr/bin/python3 "${FIXTURES:?}/make-canon-plugin.py" "$EOSWC_PLUGIN_DIR"

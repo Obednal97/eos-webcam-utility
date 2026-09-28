@@ -1,0 +1,4 @@
+#!/bin/bash
+# Test stub: pretend to be Apple Silicon.
+[ "${1:-}" = "-m" ] && { echo arm64; exit 0; }
+echo Darwin

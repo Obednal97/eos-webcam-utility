@@ -1,0 +1,5 @@
+#!/bin/bash
+# Test stub for commands the scripts under test must never run (sudo, curl).
+echo "FORBIDDEN $(basename "$0") $*" >> "${STUB_LOG:?STUB_LOG not set}"
+echo "test stub: $(basename "$0") must not be called" >&2
+exit 99

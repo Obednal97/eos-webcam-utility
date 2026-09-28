@@ -1,0 +1,11 @@
+#!/bin/bash
+# Test stub: `launchctl list` prints $STUB_LAUNCHCTL_LIST (a file in real
+# launchctl's "PID Status Label" format); load/unload are only recorded.
+echo "launchctl $*" >> "${STUB_LOG:?STUB_LOG not set}"
+if [ "$1" = list ]; then
+    printf 'PID\tStatus\tLabel\n'
+    if [ -n "${STUB_LAUNCHCTL_LIST:-}" ] && [ -f "$STUB_LAUNCHCTL_LIST" ]; then
+        cat "$STUB_LAUNCHCTL_LIST"
+    fi
+fi
+exit 0

@@ -8,7 +8,8 @@
 
 set -e
 
-PLUGIN_DIR="/Library/CoreMediaIO/Plug-Ins/DAL/EOSWebcamUtility.plugin"
+# EOSWC_PLUGIN_DIR exists only so tests/ can run against a fake plug-in; leave it unset.
+PLUGIN_DIR="${EOSWC_PLUGIN_DIR:-/Library/CoreMediaIO/Plug-Ins/DAL/EOSWebcamUtility.plugin}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 USER_HOME="$HOME"
 # Match install.sh: the clone this script was run from (repo root).

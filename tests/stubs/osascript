@@ -1,0 +1,41 @@
+#!/bin/bash
+# Test stub for `osascript -e 'do shell script "..." with administrator
+# privileges'`. Runs the shell script as the current user (no elevation)
+# while simulating TCC: $TCC_PROTECTED (the sandbox's fake ~/Downloads) is
+# made unreadable for the duration, as it is for the real elevated shell.
+echo "osascript $*" >> "${STUB_LOG:?STUB_LOG not set}"
+[ "${1:-}" = "-e" ] || { echo "osascript stub: expected -e" >&2; exit 2; }
+script="$2"
+prefix='do shell script "'
+suffix='" with administrator privileges'
+case "$script" in
+    "$prefix"*"$suffix") ;;
+    *) echo "osascript stub: unexpected AppleScript: $script" >&2; exit 2 ;;
+esac
+body="${script#"$prefix"}"
+body="${body%"$suffix"}"
+[ "$body" = true ] && exit 0
+if [ -n "${STUB_OSASCRIPT_CANCEL:-}" ]; then
+    echo "execution error: User canceled. (-128)" >&2
+    exit 1
+fi
+protected="${TCC_PROTECTED:-}"
+if [ -n "$protected" ]; then
+    # Only ever chmod inside the test sandbox.
+    case "$protected" in
+        "${EOSWC_TEST_SANDBOX:?}"/*) ;;
+        *) echo "osascript stub: TCC_PROTECTED outside sandbox: $protected" >&2; exit 2 ;;
+    esac
+    trap 'chmod 755 "$protected"' EXIT
+    chmod 000 "$protected"
+fi
+{
+    echo "--- root script ---"
+    echo "$body"
+    # install.sh passes `bash '<script>'`: log what that script will run too.
+    case "$body" in
+        "bash '"*"'") f="${body#bash \'}"; f="${f%\'}"; [ -f "$f" ] && cat "$f" ;;
+    esac
+    echo "--- end root script ---"
+} >> "$STUB_LOG"
+bash -c "$body"

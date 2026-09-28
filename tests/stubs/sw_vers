@@ -1,0 +1,3 @@
+#!/bin/bash
+# Test stub.
+printf 'ProductName:\tmacOS\nProductVersion:\t26.0\nBuildVersion:\t00A000\n'

@@ -41,6 +41,8 @@ eoswc_refuse_root || exit 1
 # The real plug-in path, unless a test sandbox says otherwise (see common.sh).
 eoswc_select_plugin_dir || exit 1
 PLUGIN_DIR="$EOSWC_PLUGIN"
+eoswc_select_canon_app_dir || exit 1
+CANON_APPS="$EOSWC_CANON_APPS"
 # EOSWC_TEST_PKG_SHA256: one more accepted --pkg checksum, so tests/ can
 # install a fake package. Honoured only inside a marked test sandbox.
 eoswc_require_sandbox_for EOSWC_TEST_PKG_SHA256 || exit 1
@@ -414,15 +416,49 @@ if [ "$NEED_INSTALLER" = 1 ]; then
     # -R: a .pkg is either a flat file or a bundle-style directory.
     cp -R "$PKG_FILE" "$STAGE/canon.pkg"
 fi
+# On macOS 14+ Canon's postinstall runs its Camera Extension installer last
+# and exits 1 unless you approve the extension there and then. By that point
+# the DAL plug-in (the part the fork patches), EDSDK and Canon's LaunchAgent
+# are all installed; only the optional extension is missing. So that one
+# failure is not fatal: root checks that the payload is really there (and the
+# backup below verifies it as Canon's v1.3.16) and carries on.
+MACOS_VERSION="$(sw_vers -productVersion 2>/dev/null)" || MACOS_VERSION=""
+MACOS_MAJOR="${MACOS_VERSION%%.*}"
+CAMEXT_EXPECTED=0
+if [ "$NEED_INSTALLER" = 1 ] && [ "${MACOS_MAJOR:-0}" -ge 14 ] 2>/dev/null; then
+    CAMEXT_EXPECTED=1
+    echo "  macOS $MACOS_VERSION: Canon's installer may open \"EOS Webcam Camera Extension"
+    echo "  Installer\" and ask you to allow Canon's Camera Extension. That's optional; the"
+    echo "  fork patches the DAL plug-in, which works without it. If that window appears,"
+    echo "  allow the extension or close the window; the install carries on either way."
+fi
 ROOT_SCRIPT="$STAGE/deploy.sh"
 {
     echo '#!/bin/bash'
     echo 'set -e'
-    [ "$NEED_INSTALLER" = 1 ] && echo "installer -pkg '$STAGE/canon.pkg' -target /"
     # Every value interpolated into these lines is shell-quoted (eoswc_sq):
     # $HOME and the user name end up in root's command line.
     Q_PATCHER="$(eoswc_sq "$STAGE/patch-binaries.py")"
     Q_BACKUP="$(eoswc_sq "$BACKUP_DIR")"
+    if [ "$NEED_INSTALLER" = 1 ]; then
+        echo "installer_rc=0"
+        echo "installer -pkg $(eoswc_sq "$STAGE/canon.pkg") -target / || installer_rc=\$?"
+        echo "if [ \"\$installer_rc\" != 0 ]; then"
+        if [ "$CAMEXT_EXPECTED" = 1 ]; then
+            echo "  if [ -d $(eoswc_sq "$CANON_APPS/$EOSWC_CAMEXT_HOST") ] &&"
+            echo "     [ -s $(eoswc_sq "$PLUGIN_BIN/EOSWebcamUtility") ] && [ -s $(eoswc_sq "$PLUGIN_RES/EOSWebcamService") ] && [ -s $(eoswc_sq "$PLUGIN_RES/EWCProxy") ]; then"
+            echo "    echo 'Canon installer: only its Camera Extension step failed (not approved); the plug-in is installed, carrying on.'"
+            echo "    : > $(eoswc_sq "$STAGE/camext-not-approved")"
+            echo "  else"
+            echo "    echo \"ERROR: Canon's installer failed (exit \$installer_rc), and not only at its Camera Extension step; nothing was patched.\" >&2"
+            echo "    exit 1"
+            echo "  fi"
+        else
+            echo "  echo \"ERROR: Canon's installer failed (exit \$installer_rc); nothing was patched.\" >&2"
+            echo "  exit 1"
+        fi
+        echo "fi"
+    fi
     case "$SNAPSHOT" in
     new)
         # Back up the pristine originals and verify the backup before patching:
@@ -471,6 +507,8 @@ if ! osascript -e "do shell script \"bash '$ROOT_SCRIPT'\" with administrator pr
     fi
     exit 1
 fi
+CAMEXT_PENDING=0
+[ -e "$STAGE/camext-not-approved" ] && CAMEXT_PENDING=1
 rm -rf "$STAGE"
 STAGE=""
 echo "  Patched and signed"
@@ -617,6 +655,21 @@ if [ "$SVC" = 0 ] || [ "$MGR" = 0 ]; then
     echo ""
     echo "  Something isn't running. Check $LOG_DIR/eos-camera-manager-stderr.log"
     echo "  and run: bash '$SCRIPT_DIR/diagnose.sh'"
+fi
+# Canon's Camera Extension (macOS 14+): not the fork's, not patched by it.
+CAMEXT_STATE="$(eoswc_camera_extension_state)"
+if [ "$CAMEXT_PENDING" = 1 ] || [ -d "$CANON_APPS/$EOSWC_CAMEXT_HOST" ] ||
+   { [ "$CAMEXT_STATE" != "not registered" ] && [ "$CAMEXT_STATE" != unknown ]; }; then
+    echo ""
+    echo "  Canon's Camera Extension: $CAMEXT_STATE"
+    if [ "$CAMEXT_PENDING" = 1 ]; then
+        echo "    Canon's installer reported an error only because this extension"
+        echo "    wasn't approved. That is expected: the fork doesn't need it."
+    fi
+    echo "    Canon's package also includes a Camera Extension. If it is (or you later"
+    echo "    get it) approved in System Settings, apps list a SECOND camera called"
+    echo "    'EOS Webcam Utility'. The fork doesn't patch that one."
+    eoswc_camera_extension_removal_help "    "
 fi
 echo ""
 echo "  Usage:"

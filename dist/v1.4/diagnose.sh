@@ -14,6 +14,7 @@
 #   - Whether the EDSDK framework is present
 #   - Whether the background services/processes are running
 #   - Where the camera manager is installed, and whether launchd can run it
+#   - Canon's Camera Extension (macOS 14+): installed, approved, or not
 #   - Whether the config files exist
 #   - Whether your Canon camera is seen on USB
 #   - Which cameras macOS itself can see (the virtual cam should appear here
@@ -41,6 +42,8 @@ fi
 # The real plug-in path, unless a test sandbox says otherwise (see common.sh).
 eoswc_select_plugin_dir || exit 1
 PLUGIN="$EOSWC_PLUGIN"
+eoswc_select_canon_app_dir || exit 1
+CANON_APPS="$EOSWC_CANON_APPS"
 AGENT_PLIST="$HOME/Library/LaunchAgents/$EOSWC_AGENT_LABEL.plist"
 
 # One line per launchd job: running (with PID), loaded but not running (the
@@ -126,6 +129,28 @@ if [ -f "$AGENT_PLIST" ]; then
     esac
 else
     echo "LaunchAgent: not installed ($AGENT_PLIST missing)"
+fi
+
+# (No "X's " possessives in this section: the name redaction mangles them.)
+echo; echo "----- Canon Camera Extension -----"
+echo "(The Canon v1.3.16 package also ships a Camera Extension, $EOSWC_CAMEXT_ID."
+echo " On macOS 14+ the Canon installer asks you to approve it; once approved, apps"
+echo " list a second 'EOS Webcam Utility' camera, which the fork does not patch.)"
+if [ -d "$CANON_APPS/$EOSWC_CAMEXT_HOST" ]; then
+    echo "host app: $CANON_APPS/$EOSWC_CAMEXT_HOST (installed)"
+else
+    echo "host app: not installed"
+fi
+CAMEXT_STATE="$(eoswc_camera_extension_state)"
+echo "state (systemextensionsctl): $CAMEXT_STATE"
+case "$CAMEXT_STATE" in
+    *"waiting for user"*)
+        echo "[INFO] installed but not approved: no second camera. Approving it is optional." ;;
+    *enabled*)
+        echo "[INFO] approved: expect two 'EOS Webcam Utility' cameras in apps." ;;
+esac
+if [ "$CAMEXT_STATE" != "not registered" ] && [ "$CAMEXT_STATE" != unknown ]; then
+    eoswc_camera_extension_removal_help ""
 fi
 
 echo; echo "----- Config and camera manager files -----"

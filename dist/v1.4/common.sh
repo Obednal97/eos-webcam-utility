@@ -125,6 +125,56 @@ eoswc_select_plugin_dir() {
     EOSWC_PLUGIN="$p"
 }
 
+# Canon's apps folder. Canon's v1.3.16 package puts "EOS Webcam Camera
+# Extension Installer.app" (the host app of Canon's Camera Extension) and
+# "EOS Webcam Utility Uninstaller.app" here. EOSWC_CANON_APP_DIR is a
+# test-only hook, guarded like EOSWC_PLUGIN_DIR.
+EOSWC_REAL_CANON_APP_DIR="/Applications/EOS Webcam Utility"
+eoswc_select_canon_app_dir() {
+    EOSWC_CANON_APPS="$EOSWC_REAL_CANON_APP_DIR"
+    local p
+    p="$(eoswc_sandboxed_path EOSWC_CANON_APP_DIR "${EOSWC_CANON_APP_DIR:-}" "$EOSWC_REAL_CANON_APP_DIR")" || return 1
+    EOSWC_CANON_APPS="$p"
+}
+
+# Canon's Camera Extension (a CMIOExtension system extension, signed by Canon,
+# team NC5A977249). On macOS 14+ Canon's postinstall asks the user to approve
+# it; once approved it shows up as a second "EOS Webcam Utility" camera. The
+# fork does not patch it.
+EOSWC_CAMEXT_ID="com.canon.cusa.eoswebcam.cameraExtension"
+EOSWC_CAMEXT_HOST="EOS Webcam Camera Extension Installer.app"
+EOSWC_CANON_UNINSTALLER="EOS Webcam Utility Uninstaller.app"
+
+# Print the Camera Extension's state as systemextensionsctl reports it, e.g.
+# "activated enabled" or "activated waiting for user"; "not registered" if it
+# isn't listed; "unknown" if systemextensionsctl can't be run. Read-only.
+eoswc_camera_extension_state() {
+    local out line state
+    command -v systemextensionsctl >/dev/null 2>&1 || { echo unknown; return 0; }
+    out="$(systemextensionsctl list 2>/dev/null)" || { echo unknown; return 0; }
+    line="$(printf '%s\n' "$out" | grep -m1 -F "$EOSWC_CAMEXT_ID")"
+    if [ -z "$line" ]; then
+        echo "not registered"
+        return 0
+    fi
+    state="$(printf '%s\n' "$line" | sed -n 's/.*\[\([^]]*\)\][[:space:]]*$/\1/p')"
+    echo "${state:-registered}"
+}
+
+# How to remove Canon's Camera Extension. Printed, never done for the user:
+# deactivating a system extension needs the user's own approval, and
+# `systemextensionsctl uninstall` only works with SIP disabled. (No "X's "
+# possessives: diagnose.sh's name redaction would mangle them.)
+eoswc_camera_extension_removal_help() {
+    local apps="${EOSWC_CANON_APPS:-$EOSWC_REAL_CANON_APP_DIR}"
+    echo "$1To remove the Canon Camera Extension (the fork never does this for you):"
+    echo "$1  - The Canon uninstaller removes it along with the rest of the Canon"
+    echo "$1    software: open \"$apps/$EOSWC_CANON_UNINSTALLER\"."
+    echo "$1  - Or keep the Canon software and turn just the extension off in System"
+    echo "$1    Settings > General > Login Items & Extensions > Camera Extensions."
+    echo "$1  (\`systemextensionsctl uninstall\` needs SIP disabled; do not do that.)"
+}
+
 # Refuse to run as root. The scripts ask for admin rights themselves, for one
 # step only; run under sudo, every file they write in your home (daemon,
 # LaunchAgent, backups) would be root's, and $HOME may not even be yours.

@@ -13,12 +13,13 @@
 #   - The plug-in's code signature, Gatekeeper assessment, and quarantine flag
 #   - Whether the EDSDK framework is present
 #   - Whether the background services/processes are running
+#   - Where the camera manager is installed, and whether launchd can run it
 #   - Whether the config files exist
 #   - Whether your Canon camera is seen on USB
 #   - Which cameras macOS itself can see (the virtual cam should appear here
 #     if the plug-in loaded correctly)
 #   - Recent system logs about the plug-in loading (or failing to load)
-#   - The camera manager's own log
+#   - The camera manager's own log, and launchd's stderr log for it
 #
 # Usage:
 #   1. Open QuickTime Player -> File -> New Movie Recording, then click the
@@ -31,6 +32,28 @@
 
 OUT="$HOME/Desktop/eos-webcam-diagnostics.txt"
 PLUGIN="/Library/CoreMediaIO/Plug-Ins/DAL/EOSWebcamUtility.plugin"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [ ! -f "$SCRIPT_DIR/common.sh" ]; then
+    echo "ERROR: common.sh not found next to this script."
+    exit 1
+fi
+# shellcheck source=common.sh
+. "$SCRIPT_DIR/common.sh"
+AGENT_PLIST="$HOME/Library/LaunchAgents/$EOSWC_AGENT_LABEL.plist"
+
+# One line per launchd job: running (with PID), loaded but not running (the
+# PID column is "-", e.g. a crash loop), or not loaded at all.
+job_status() {
+    local row
+    row=$(launchctl list 2>/dev/null | awk -v label="$1" '$3 == label { print $1 " " $2; exit }')
+    if eoswc_job_running "$1"; then
+        echo "$1: RUNNING (PID ${row%% *})"
+    elif [ -n "$row" ]; then
+        echo "$1: LOADED BUT NOT RUNNING (last exit status ${row#* })"
+    else
+        echo "$1: NOT LOADED"
+    fi
+}
 
 # --- Build privacy redaction rules (so the report is safe to paste publicly) ---
 # Redacts: the login username, the account holder's real name, and any
@@ -78,11 +101,33 @@ ls -la "/Library/Frameworks/EDSDK.framework" 2>&1 | head -5
 
 echo; echo "----- Services loaded? -----"
 launchctl list 2>/dev/null | grep -iE "ewc|eos|canon" || echo "no EWC/EOS services loaded"
+echo "-- running? (from launchctl's PID column) --"
+job_status "$EOSWC_CANON_LABEL"
+job_status "$EOSWC_AGENT_LABEL"
 echo "-- processes --"
 pgrep -fl "EOSWebcam|EWCProxy|EWCService" || echo "no service processes running"
 
-echo; echo "----- Config present? -----"
-ls -la "$HOME/Library/Application Support/EWCService/" 2>&1
+echo; echo "----- Camera manager install -----"
+echo "expected daemon: $EOSWC_RUNTIME_DIR/eos-camera-manager.sh"
+if [ -f "$AGENT_PLIST" ]; then
+    DAEMON="$(eoswc_agent_daemon_path "$AGENT_PLIST")"
+    echo "LaunchAgent runs: ${DAEMON:-<no eos-camera-manager.sh in LaunchAgent>}"
+    if [ -n "$DAEMON" ] && [ ! -f "$DAEMON" ]; then
+        echo "[WARN] that daemon file does not exist — re-run the installer."
+    fi
+    if [ -n "$DAEMON" ] && [ "$DAEMON" != "$EOSWC_RUNTIME_DIR/eos-camera-manager.sh" ]; then
+        echo "[WARN] LaunchAgent points at an old install location — re-run the installer."
+    fi
+    case "$DAEMON" in
+        "$HOME/Downloads/"*|"$HOME/Desktop/"*|"$HOME/Documents/"*|"$HOME/Library/Mobile Documents/"*)
+            echo "[WARN] that is a privacy-protected folder: launchd can't run it (exit 126)." ;;
+    esac
+else
+    echo "LaunchAgent: not installed ($AGENT_PLIST missing)"
+fi
+
+echo; echo "----- Config and camera manager files -----"
+ls -la "$EOSWC_RUNTIME_DIR/" 2>&1
 
 echo; echo "----- Canon camera on USB? -----"
 system_profiler SPUSBDataType 2>/dev/null | grep -iA3 canon || echo "No Canon device on USB"
@@ -102,6 +147,9 @@ log show --last 10m --predicate \
 
 echo; echo "----- Camera manager log (last 30 lines) -----"
 tail -30 "$HOME/Library/Logs/eos-camera-manager.log" 2>/dev/null || echo "no manager log found"
+echo "-- launchd stderr for the camera manager (last 10 lines) --"
+echo "(\"Operation not permitted\" here means launchd can't read the daemon's folder)"
+tail -10 "$HOME/Library/Logs/eos-camera-manager-stderr.log" 2>/dev/null || echo "no stderr log found"
 
 echo; echo "===== VERDICT ====="
 if echo "$CAMS" | grep -q "EOS Webcam Utility"; then
@@ -114,6 +162,11 @@ else
     echo "       Most likely: it isn't installed, or wasn't (re)installed after a macOS upgrade."
     echo "       Fix: re-run the installer ->  bash dist/v1.4/install.sh"
     echo "       Then reboot and run this diagnostic again."
+fi
+if ! eoswc_job_running "$EOSWC_AGENT_LABEL"; then
+    echo "[WARN] The camera manager isn't running, so auto-retry and the loading screens"
+    echo "       won't work. See 'Camera manager install' above; re-running the installer"
+    echo "       puts it in $EOSWC_RUNTIME_DIR/."
 fi
 echo "===== end of report ====="
 } 2>&1 | sed "${REDACT[@]}" > "$OUT"

@@ -76,6 +76,8 @@ CANON_PKG_SHA256="5ad0333bd6a1c66f88c70aac631e5133c5f3dd6fc579e45dd473d1e964c023
 # Canon U.S.A., Inc. (NC5A977249)" and notarised.
 CANON_INNER_PKG_SHA256="cb368a204db87047fa5e47c8593ac0e654baee39e0c302bed3f7d3cf5364c0eb"
 CANON_PKG_SIGNER="Developer ID Installer: Canon U.S.A., Inc. (NC5A977249)"
+# CFBundleShortVersionString of the plug-in in that package.
+CANON_PLUGIN_VERSIONS="1.3.16.0 1.3.16"
 
 # --- Args ---
 USER_PKG=""
@@ -213,6 +215,19 @@ SOURCE=""          # installed | download | userpkg
 INSTALL_TYPE="fresh"
 if [ -d "$PLUGIN_DIR" ]; then
     SOURCE="installed"
+    # The patch offsets are for Canon's v1.3.16 only. Refuse anything that
+    # doesn't say it's that version before looking any closer.
+    PLUGIN_VERSION="$(eoswc_plist_value "$PLUGIN_DIR/Contents/Info.plist" CFBundleShortVersionString)" || PLUGIN_VERSION=""
+    case " $CANON_PLUGIN_VERSIONS " in
+        *" $PLUGIN_VERSION "*) ;;
+        *)
+            echo "  ERROR: the installed EOS Webcam Utility is version ${PLUGIN_VERSION:-unknown (no readable Info.plist)},"
+            echo "         not Canon's v1.3.16, the only version this fork can patch."
+            echo "         Nothing was changed. Remove it with Canon's uninstaller"
+            echo "         ($CANON_APPS/$EOSWC_CANON_UNINSTALLER), then re-run this"
+            echo "         to install v1.3.16."
+            exit 1 ;;
+    esac
     # Only these two states are safe to go on from: Canon's complete v1.3.16
     # originals (back them up, then patch) or the fork's fully patched
     # binaries (nothing to back up or patch). Anything else (a different
@@ -244,10 +259,17 @@ case "$INSTALL_TYPE" in
     upgrade_fork)     echo "  Mode:          Update existing fork" ;;
 esac
 case "$SOURCE" in
-    installed) echo "  Canon source:  already installed (patch in place)" ;;
+    installed) echo "  Canon source:  already installed v${PLUGIN_VERSION} (patch in place)" ;;
     userpkg)   echo "  Canon source:  $USER_PKG" ;;
     download)  echo "  Canon source:  download from Canon" ;;
 esac
+if [ "$SOURCE" = installed ] && [ -n "$USER_PKG" ]; then
+    echo ""
+    echo "  NOTE: --pkg is NOT used: EOS Webcam Utility is already installed, so the"
+    echo "        installed copy is patched in place and $USER_PKG"
+    echo "        is left alone. To install from that package instead, remove Canon's"
+    echo "        software first (uninstall.sh, then Canon's own uninstaller)."
+fi
 echo ""
 
 # --- Consent ---

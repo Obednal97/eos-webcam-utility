@@ -243,3 +243,9 @@ eoswc_remove_legacy_runtime() {
         fi
     done
 }
+
+# Print one value from a plist (keypath like ProgramArguments.1), if it has it.
+eoswc_plist_value() {
+    plutil -extract "$2" raw -o - "$1" 2>/dev/null
+}
+

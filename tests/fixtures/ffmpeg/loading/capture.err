@@ -1,0 +1,13 @@
+[AVFoundation indev @ 0x13b604290] Overriding selected pixel format to use uyvy422 instead.
+Input #0, avfoundation, from '1:none':
+  Duration: N/A, start: 351234.567890, bitrate: N/A
+  Stream #0:0: Video: rawvideo (UYVY / 0x59565955), uyvy422(tv, bt709), 1920x1080, 30 tbr, 1000k tbn
+Output #0, framemd5, to 'pipe:':
+  Metadata:
+    encoder         : Lavf62.3.100
+  Stream #0:0: Video: rawvideo (UYVY / 0x59565955), uyvy422(tv, bt709), 1920x1080, q=2-31, 30 tbr, 1000k tbn
+Stream mapping:
+  Stream #0:0 -> #0:0 (copy)
+Press [q] to stop, [?] for help
+[out#0/framemd5 @ 0x600003ce4000] video:3888000KiB audio:0KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: unknown
+frame=  120 fps=30 q=-1.0 Lsize=      24KiB time=00:00:03.98 bitrate=  49.4kbits/s speed=   1x

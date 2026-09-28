@@ -1,0 +1,20 @@
+#!/bin/bash
+# Test stub: the real awk, except for diagnose.sh's redaction filter (the
+# call with EOSWC_REDACT_MODE=redact), which $STUB_AWK_REDACT can break:
+#   fail         exits 2 with no output
+#   empty        prints nothing, exits 0
+#   truncate     prints the first 3 lines, exits 0
+#   passthrough  copies its input unredacted, exits 0
+#   error        redacts as usual but then exits 1 (a filter that errors
+#                part-way, with its output looking complete)
+if [ "${EOSWC_REDACT_MODE:-}" = redact ] && [ -n "${STUB_AWK_REDACT:-}" ]; then
+    echo "awk-redact-broken $STUB_AWK_REDACT" >> "${STUB_LOG:?STUB_LOG not set}"
+    case "$STUB_AWK_REDACT" in
+        fail)        cat > /dev/null; exit 2 ;;
+        empty)       cat > /dev/null; exit 0 ;;
+        truncate)    /usr/bin/head -3; cat > /dev/null; exit 0 ;;
+        passthrough) cat; exit 0 ;;
+        error)       /usr/bin/awk "$@"; exit 1 ;;
+    esac
+fi
+exec /usr/bin/awk "$@"

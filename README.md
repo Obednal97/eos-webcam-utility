@@ -271,8 +271,21 @@ rm -r ~/Library/Application\ Support/EWCService/backups
 ```
 
 If something isn't working, `bash dist/v1.4/diagnose.sh` writes a report to
-your Desktop. It shows where the daemon is installed and whether it is actually
-running.
+your Desktop (or `--output FILE`). It shows where the daemon is installed and
+whether it is actually running, whether a Canon camera is on USB (found by
+Canon's USB vendor ID, 0x04a9, so it works on macOS 26 as well as 13 to 15),
+and recent log messages from Canon's software. It changes nothing.
+
+The report is meant to be pasted into a public GitHub issue, so it is
+redacted before anything is written. Your username, real name, home folder
+path, computer and host name, the Mac's serial number and hardware UUID, USB
+serial numbers, UUIDs, IP, MAC and email addresses, and values labelled
+serial/owner/artist/copyright (a camera can report its owner's name) are
+replaced with labels such as `<user>` and `<serial>`. Canon's own log files, the
+names of your other USB devices and log lines that list other apps are left
+out. If redaction fails or leaves any of that in, no report is written and the
+script exits with an error. Redaction can still miss something, so **read the
+report before you post it**.
 
 ---
 

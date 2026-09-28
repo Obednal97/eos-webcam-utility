@@ -1,0 +1,30 @@
+#!/bin/bash
+# Test stub for the read-only ioreg queries diagnose.sh makes:
+#   ioreg -p IOUSB -l -w0              prints $STUB_IOREG_USB (a fixture file),
+#                                      or a USB tree with no devices
+#   ioreg -rd1 -c IOPlatformExpertDevice
+#                                      a fake Mac: serial $STUB_SERIAL, hardware
+#                                      UUID $STUB_HW_UUID
+# STUB_IOREG_FAIL: every call fails with no output (no ioreg data).
+echo "ioreg $*" >> "${STUB_LOG:?STUB_LOG not set}"
+[ -z "${STUB_IOREG_FAIL:-}" ] || exit 1
+case " $* " in
+    *" -p IOUSB "*)
+        if [ -n "${STUB_IOREG_USB:-}" ]; then
+            cat "$STUB_IOREG_USB"
+        else
+            printf '+-o Root  <class IORegistryEntry, id 0x100000100, retain 35>\n'
+            printf '  +-o AppleT8122USBXHCI@00000000  <class AppleT8122USBXHCI, id 0x10000048d, registered, matched, active, busy 0 (1 ms), retain 37>\n'
+        fi ;;
+    *" IOPlatformExpertDevice "*)
+        printf '+-o J516sAP  <class IOPlatformExpertDevice, id 0x1000002b6, registered, matched, active, busy 0 (1 ms), retain 40>\n'
+        printf '    {\n'
+        printf '      "IOPlatformSerialNumber" = "%s"\n' "${STUB_SERIAL:-C02STUBSER1AL}"
+        printf '      "IOPlatformUUID" = "%s"\n' "${STUB_HW_UUID:-5A1D0C3E-7F21-4B8A-9C2D-00112233AABB}"
+        printf '      "model" = <"Mac15,8">\n'
+        printf '    }\n' ;;
+    *)
+        echo "FORBIDDEN ioreg $*" >> "$STUB_LOG"
+        exit 99 ;;
+esac
+exit 0

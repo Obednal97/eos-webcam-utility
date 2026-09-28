@@ -1,1 +1,18 @@
-noop
+#!/bin/bash
+# Test stub: `log show ...` records its arguments (one per line after a
+# "log show" line, so a test can check the predicate) and prints the file
+# $STUB_LOG_OUTPUT, if set, as `log show --style compact` output. Anything
+# else is forbidden.
+{
+    echo "log $*"
+    for a in "$@"; do echo "log-arg: $a"; done
+} >> "${STUB_LOG:?STUB_LOG not set}"
+if [ "${1:-}" != show ]; then
+    echo "FORBIDDEN log $*" >> "$STUB_LOG"
+    exit 99
+fi
+if [ -n "${STUB_LOG_OUTPUT:-}" ]; then
+    printf 'Timestamp               Ty Process[PID:TID]\n'
+    cat "$STUB_LOG_OUTPUT"
+fi
+exit 0

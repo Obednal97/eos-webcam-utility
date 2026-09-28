@@ -40,9 +40,15 @@ root_text="$body"
 $(cat "$file")"
 fake_library="${EOSWC_TEST_SANDBOX:?}/Library/"
 fake_apps="$EOSWC_TEST_SANDBOX/Applications/"
-root_text="${root_text//"$fake_library"/<sandbox>/}"
-root_text="${root_text//"$fake_apps"/<sandbox>/}"
-if printf '%s\n' "$root_text" | grep -qF -e '/Library/CoreMediaIO/' -e '/Applications/EOS Webcam Utility'; then
+# (Literal replacements, in python: bash's ${var//...} is quadratic and took
+# half a minute on a long root script.)
+# Fails closed: anything but the word "clean" (an error included) refuses.
+verdict="$(printf '%s\n' "$root_text" | /usr/bin/python3 -I -c '
+import sys
+text = sys.stdin.read().replace(sys.argv[1], "<sandbox>/").replace(sys.argv[2], "<sandbox>/")
+print("forbidden" if ("/Library/CoreMediaIO/" in text or "/Applications/EOS Webcam Utility" in text) else "clean")
+' "$fake_library" "$fake_apps" 2>/dev/null)" || verdict=error
+if [ "$verdict" != clean ]; then
     echo "FORBIDDEN osascript on the real plug-in or Canon's apps" >> "$STUB_LOG"
     echo "osascript stub: root script names the real plug-in or Canon's apps; refusing" >&2
     exit 99

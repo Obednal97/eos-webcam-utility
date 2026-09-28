@@ -13,8 +13,10 @@
 #     guard is provably in place, so a script without it can never reach the
 #     real /Library plug-in
 #   - tests/stubs comes first on PATH: osascript, launchctl, installer,
-#     codesign, pkill, sleep, ... are stubs that record their calls; sudo and
-#     curl refuse to run
+#     codesign, pkill, sleep, ffmpeg, ... are stubs that record their calls;
+#     sudo and curl refuse to run. codesign simulates the fake binaries'
+#     signatures (fixtures/fakesig.py); ffmpeg plays back recorded output
+#     and never opens a camera
 #   - the clone is a copy of dist/ under the fake ~/Downloads, and the
 #     osascript stub makes ~/Downloads unreadable while the "root" step runs,
 #     the way TCC does for the real elevated shell
@@ -128,7 +130,8 @@ enter_sandbox() {
           STUB_FAIL_CMD_ONCE STUB_USERNAME STUB_FULLNAME STUB_COMPUTER_NAME \
           STUB_LOCAL_HOST_NAME STUB_HOST_NAME STUB_HOSTNAME STUB_SERIAL \
           STUB_HW_UUID STUB_IOREG_USB STUB_IOREG_FAIL STUB_SP_USB STUB_SP_USBHOST \
-          STUB_SP_CAMERAS STUB_LOG_OUTPUT STUB_AWK_REDACT
+          STUB_SP_CAMERAS STUB_LOG_OUTPUT STUB_AWK_REDACT \
+          STUB_FFMPEG_SCENARIO STUB_FFMPEG_DIR STUB_FFMPEG_CAPTURE_FAIL
 
     mkdir -p "$HOME/Downloads" "$HOME/Desktop" "$HOME/Library/LaunchAgents" \
              "$HOME/Library/Logs" "$TMPDIR"
@@ -152,7 +155,7 @@ enter_sandbox() {
     local t
     for t in osascript launchctl installer codesign pkill sudo curl \
              pkgutil systemextensionsctl xcode-select id chown chmod \
-             log ioreg scutil hostname system_profiler awk; do
+             log ioreg scutil hostname system_profiler awk ffmpeg; do
         [ "$(command -v "$t")" = "$STUBS_DIR/$t" ] ||
             die "$t is not stubbed (resolves to $(command -v "$t"))"
     done
@@ -230,7 +233,8 @@ holds_patched()   { /usr/bin/python3 -B "$CLONE/dist/v1.4/patch-binaries.py" --c
 
 staging_dirs() {
     find "$STAGE_ROOT" "$TMPDIR" -mindepth 1 -maxdepth 1 \
-        \( -name 'eoswc-stage.*' -o -name 'eoswc-restore.*' -o -name 'eoswc-deploy.*' -o -name 'eoswc.*' \) 2>/dev/null | sort || true
+        \( -name 'eoswc-stage.*' -o -name 'eoswc-restore.*' -o -name 'eoswc-deploy.*' -o -name 'eoswc.*' \
+           -o -name 'eoswc-fps.*' \) 2>/dev/null | sort || true
 }
 
 # Checked after every test: no forbidden command ran, no staging dir left.
@@ -249,6 +253,8 @@ assert_log_matches() { grep -qE -- "$1" "$STUB_LOG" || fail "expected /$1/ in th
 run_tests() {
     local t pass=0 failed=0 status
     for t in $(declare -F | awk '{print $3}' | grep '^test_'); do
+        # TEST_ONLY=test_name runs just that test (while debugging one).
+        [ -z "${TEST_ONLY:-}" ] || [ "$t" = "$TEST_ONLY" ] || continue
         make_sandbox
         set +e
         (

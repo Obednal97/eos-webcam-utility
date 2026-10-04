@@ -91,11 +91,33 @@ The exact offsets and before/after bytes live in [`dist/v1.4/patch-binaries.py`]
   installer checks that `python3` really runs before it changes anything
 - Internet access — only if Canon's base software isn't already installed (the installer downloads it from Canon)
 
-### Tested With
+### Supported cameras
 
-- Canon EOS 250D (Rebel SL3) on macOS Tahoe (26.3)
+The fork works with the cameras Canon's EOS Webcam Utility supports over USB.
+Canon's current list (from its EOS Webcam Utility Pro page):
 
-This fork has only been tested with the Canon 250D, but the underlying patches modify resolution defaults and feature gates that are shared across all Canon EOS cameras. If your camera was supported by the original EOS Webcam Utility v1.3.16, this fork should work the same way. If you test with a different camera model, please open an issue to let me know how it goes — I'd love to build a community-verified compatibility list.
+| Range | Models |
+|---|---|
+| EOS DSLR | 1D X Mark II, 1D X Mark III, 5D Mark IV, 5DS, 5DS R, 6D, 6D Mark II, 7D Mark II, 77D, 80D, 90D, 200D (Rebel SL2), 250D (Rebel SL3), 750D (Rebel T6i), 760D (Rebel T6s), 800D (Rebel T7i), 850D (Rebel T8i), 1300D (Rebel T6), 2000D (Rebel T7), 4000D (Rebel T100) |
+| EOS M | M50, M50 Mark II, M6 Mark II, M200 |
+| EOS R | R, RP, Ra, R1, R3, R5, R5 Mark II, R6, R6 Mark II, R6 Mark III, R7, R8, R10, R50, R100 |
+| PowerShot | SX70 HS, G5 X Mark II, G7 X Mark III, V10 |
+
+Canon's list is for its current software. The fork patches v1.3.16, the last
+free version, so the newest models on the list may not be recognised by it.
+
+Cameras that are **not** on the list, such as the 60D, 70D, 600D (Rebel T3i)
+and 650D (Rebel T4i), aren't on Canon's list, so they're unlikely to work
+with the fork either.
+
+**Verified with the fork:**
+
+| Camera | macOS | Result |
+|---|---|---|
+| EOS 250D (Rebel SL3) | Tahoe (26.3) | Works: 1080p, ~30fps |
+
+If you try another model, please open an issue saying how it went (camera,
+macOS version, whether it worked), and it will be added to this table.
 
 ---
 
@@ -316,6 +338,40 @@ The logo is automatically scaled to fit (never stretched) and placed above the "
 
 ---
 
+## Troubleshooting
+
+Run `bash dist/v1.4/diagnose.sh` first: it checks most of the things below
+and writes a report you can paste into an issue (see [Backups](#backups)).
+
+**The camera doesn't connect, or apps show the "not connected" screen**
+
+- **Quit Canon's EOS Utility** completely, including its menu bar icon, and
+  any other Canon camera app (Canon's EOS Webcam Utility Pro app, Image
+  Capture, Photos). Only one app can hold the camera over USB, and EOS Utility
+  takes it as soon as it starts. `diagnose.sh` warns you if EOS Utility is
+  running.
+- Use **one video app at a time**. Close Zoom before opening OBS, for example.
+- Turn the camera **off and on again** after quitting the other apps, then
+  wait about 30 seconds.
+- Plug the camera **straight into the Mac** with a data cable (not a
+  charge-only cable), not through a hub, if you can.
+- If the camera's **Wi-Fi** is on, turn it off: some models disable the USB
+  connection while it is on.
+
+**"EOS Webcam Utility" isn't in the camera list at all**
+
+The plug-in isn't loading. Re-run the installer (especially after a macOS
+upgrade), restart the Mac, and run `diagnose.sh`, whose verdict says whether
+macOS can see the virtual camera.
+
+**The camera turns off after a while**
+
+- Turn off **Auto power off** in the camera's settings menu.
+- For long calls or streams, use **Canon's AC adapter kit** for your model (a
+  dummy battery plus power supply) instead of the battery.
+
+---
+
 ## Known Limitations
 
 - **~30fps maximum** — The camera's USB EVF outputs ~26 unique frames per second. This is a hardware/firmware limitation, not software. 60fps is only possible via HDMI output.
@@ -323,6 +379,26 @@ The logo is automatically scaled to fit (never stretched) and placed above the "
 - **Camera activation takes ~20-30 seconds** — Due to a race condition with macOS's `ptpcamerad` service. The daemon handles this automatically but it takes a few retry cycles.
 - **DAL plugin architecture is deprecated** — Apple deprecated CoreMediaIO DAL plugins at WWDC 2022. The plugin still works on current macOS but may break in future versions. Canon's own v1.3.16 package already ships a signed Camera Extension (see [Canon's Camera Extension](#canons-camera-extension-macos-14-and-later)), but the fork doesn't patch it; moving the fork's changes to a Camera Extension is still open (work log 009).
 - **Apple Silicon only** — The patched binaries are ARM64. Intel Macs are not supported by this fork.
+
+---
+
+## Alternatives
+
+The fork is for Apple Silicon Macs and USB. Depending on what you need,
+something else may suit you better:
+
+- **True 1080p or 4K, or 60fps:** an HDMI capture card (such as an Elgato Cam
+  Link) with a camera that has clean HDMI output. Over USB the camera only
+  sends about 1024x576 at about 30fps, whatever software you use.
+- **Several cameras, wireless, overlays or official support:** Canon's own
+  [EOS Webcam Utility Pro](https://www.canon-europe.com/cameras/eos-webcam-utility/)
+  subscription.
+- **Windows:** this fork doesn't run on Windows.
+  [Open EOS Studio](https://github.com/Wrenbjor/cannon_eos_custom_display) is
+  an independent open-source project for Windows 11, currently tested with the
+  EOS 600D (Rebel T3i).
+- **Intel Macs:** the fork's patches are for Apple Silicon only, so Canon's own
+  software is the option there.
 
 ---
 
@@ -347,6 +423,11 @@ Areas where help would be especially appreciated:
 ---
 
 ## License and legal
+
+This project is independent of Canon. It is not affiliated with, endorsed by,
+or supported by Canon Inc. or any of its subsidiaries, so please don't contact
+Canon support about it. Canon, EOS and PowerShot are trademarks of Canon Inc.,
+used here only to say which software and cameras the project works with.
 
 This repository contains only original work: installer/uninstaller/diagnostic
 scripts, the `patch-binaries.py` patcher (which ships the byte offsets of the

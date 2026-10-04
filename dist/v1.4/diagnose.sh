@@ -668,6 +668,20 @@ pgrep -fl "EOSWebcam|EWCProxy|EWCService|eos-camera-manager" 2>/dev/null |
     grep -E '(^[0-9]+ |/)(EOSWebcamService|EWCProxy|EWCPairingService|EWCService|EWCCameraExtension)( |$)|eos-camera-manager\.sh' ||
     echo "no service processes running"
 
+# EOS Utility opens the camera over USB as soon as it starts, so the webcam
+# service can't get it. Only a fixed message is printed: no paths or app list.
+# (No "X's " possessives in this section: the name redaction mangles them.)
+echo; echo "----- Canon EOS Utility -----"
+EOS_UTILITY_RUNNING=0
+if pgrep -qf '/EOS Utility[^/]*\.app/Contents/MacOS/' 2>/dev/null; then
+    EOS_UTILITY_RUNNING=1
+    echo "[WARN] Canon EOS Utility is running. It holds the camera, so the webcam"
+    echo "       can't connect. Quit it (including its menu bar icon), then turn"
+    echo "       the camera off and on again."
+else
+    echo "not running (good)"
+fi
+
 echo; echo "----- Camera manager install -----"
 echo "expected daemon: $EOSWC_RUNTIME_DIR/eos-camera-manager.sh"
 if [ -f "$AGENT_PLIST" ]; then
@@ -766,6 +780,9 @@ if ! eoswc_job_running "$EOSWC_AGENT_LABEL"; then
     echo "[WARN] The camera manager isn't running, so auto-retry and the loading screens"
     echo "       won't work. See 'Camera manager install' above; re-running the installer"
     echo "       puts it in $EOSWC_RUNTIME_DIR/."
+fi
+if [ "$EOS_UTILITY_RUNNING" = 1 ]; then
+    echo "[WARN] Canon EOS Utility is running and holds the camera. Quit it first."
 fi
 echo "===== end of report ====="
 }

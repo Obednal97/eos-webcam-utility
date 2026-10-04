@@ -1,1 +1,13 @@
-noop
+#!/bin/bash
+# Test stub: records the call. STUB_PGREP_RUNNING=<full command line>: one
+# fake process with that command line, matched against the pattern (the last
+# argument) like `pgrep -f` does. Otherwise no process matches (exit 1).
+echo "pgrep $*" >> "${STUB_LOG:?STUB_LOG not set}"
+[ -n "${STUB_PGREP_RUNNING:-}" ] || exit 1
+printf '%s\n' "$STUB_PGREP_RUNNING" | grep -qE -- "${*: -1}" || exit 1
+case " $* " in
+    *" -q "*) ;;
+    *" -l"*) echo "4242 $STUB_PGREP_RUNNING" ;;
+    *) echo 4242 ;;
+esac
+exit 0

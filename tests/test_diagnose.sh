@@ -528,6 +528,29 @@ test_falls_back_to_spusbdatatype_on_older_macos() {
     assert_contains "$(report)" "Canon device on USB: EOS 250D (vendor ID 0x04a9, product ID 0x32e9)"
 }
 
+test_warns_when_eos_utility_is_running() {
+    export STUB_PGREP_RUNNING="/Applications/Canon Utilities/EOS Utility/EU3/EOS Utility 3.app/Contents/MacOS/EOS Utility 3"
+    run_diagnose; assert_complete_report
+    local r; r="$(report)"
+    assert_contains "$r" "[WARN] Canon EOS Utility is running. It holds the camera"
+    assert_contains "$r" "[WARN] Canon EOS Utility is running and holds the camera. Quit it first."
+    assert_lacks "$r" "Canon Utilities/"   # no paths in the report
+}
+
+test_reports_eos_utility_not_running() {
+    run_diagnose; assert_complete_report
+    local r; r="$(report)"
+    assert_contains "$r" "----- Canon EOS Utility -----"
+    assert_lacks "$r" "Canon EOS Utility is running"
+}
+
+# Canon's webcam apps live in "EOS Webcam Utility", not "EOS Utility".
+test_ignores_canon_webcam_apps() {
+    export STUB_PGREP_RUNNING="/Applications/EOS Webcam Utility/EOS Webcam Camera Extension Installer.app/Contents/MacOS/EOS Webcam Camera Extension Installer"
+    run_diagnose; assert_complete_report
+    assert_lacks "$(report)" "Canon EOS Utility is running"
+}
+
 test_says_so_when_usb_cannot_be_listed() {
     export STUB_IOREG_FAIL=1
     run_diagnose; assert_complete_report
